@@ -65,6 +65,9 @@ export const TRANSLATIONS = {
     preparing: 'Preparing',
     delayed: 'Delayed',
     completed: 'Completed',
+    myConvoys: 'My Convoys',
+    activeTab: 'Active',
+    historyTab: 'Arrived',
     silkRoad: 'Silk Road',
     amberRoad: 'Amber Road',
     gulfHarbor: 'Gulf Harbor'
@@ -89,7 +92,7 @@ export const TRANSLATIONS = {
     owned: 'مملوك',
     logout: 'استرح في الخيمة',
     routes: 'طرق التجارة',
-    bazaar: 'السوق الكبير',
+    bazaar: 'السوف الكبير',
     treasury: 'الخزانة الملكية',
     totalWealth: 'إجمالي الثروة',
     activeInvestments: 'القوافل النشطة',
@@ -107,6 +110,9 @@ export const TRANSLATIONS = {
     preparing: 'قيد التحضير',
     delayed: 'متأخر',
     completed: 'مكتمل',
+    myConvoys: 'قوافلي',
+    activeTab: 'نشط',
+    historyTab: 'وصلت',
     silkRoad: 'طريق الحرير',
     amberRoad: 'طريق العنبر',
     gulfHarbor: 'الخليج'

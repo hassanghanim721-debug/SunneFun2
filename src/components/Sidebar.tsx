@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShoppingBag, Wallet, Map as MapIcon, LogOut, Languages } from 'lucide-react';
+import { ShoppingBag, Wallet, Map as MapIcon, LogOut, Languages, TrendingUp, Crown, Gem, Store } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
 import { TRANSLATIONS } from '@/src/constants';
 
@@ -27,9 +27,37 @@ export const Sidebar: React.FC<SidebarProps & { isOpen?: boolean; onClose?: () =
   darkMode
 }) => {
   const t = TRANSLATIONS[lang];
+
+  const getUserRank = (balance: number) => {
+    if (balance >= 500000) {
+      return {
+        title: lang === 'ar' ? 'سلطان' : 'Sultan',
+        icon: Crown,
+        color: 'text-amber-500',
+        bgColor: 'bg-amber-500/20'
+      };
+    }
+    if (balance >= 100000) {
+      return {
+        title: lang === 'ar' ? 'تاجر مشهور' : 'Famous Merchant',
+        icon: Gem,
+        color: 'text-blue-400',
+        bgColor: 'bg-blue-400/20'
+      };
+    }
+    return {
+      title: lang === 'ar' ? 'تاجر مبتدئ' : 'Beginner Merchant',
+      icon: Store,
+      color: 'text-green-400',
+      bgColor: 'bg-green-400/20'
+    };
+  };
+
+  const userRank = user ? getUserRank(user.balance) : null;
   
   const menuItems = [
     { id: 'map', icon: MapIcon, label: t.tradeMap },
+    { id: 'convoys', icon: TrendingUp, label: t.myConvoys },
     { id: 'market', icon: ShoppingBag, label: t.marketplace },
     { id: 'wallet', icon: Wallet, label: t.wealth },
   ];
@@ -125,20 +153,32 @@ export const Sidebar: React.FC<SidebarProps & { isOpen?: boolean; onClose?: () =
           </div>
 
           <div className={cn(
-            "flex items-center gap-3 p-3 rounded-xl overflow-hidden",
+            "flex items-center gap-3 p-3 rounded-xl overflow-hidden relative group",
             darkMode ? "bg-gold-900/10" : "bg-gold-50/50",
             lang === 'ar' ? "flex-row-reverse text-right" : ""
           )}>
-            <div className="w-10 h-10 shrink-0 rounded-full bg-gold-200 flex items-center justify-center text-gold-700 font-bold border border-gold-300 uppercase cursor-pointer hover:bg-gold-300 transition-colors" 
+            <div className={cn(
+              "w-12 h-12 shrink-0 rounded-2xl flex items-center justify-center font-bold border transition-all cursor-pointer relative overflow-hidden",
+              userRank ? `${userRank.bgColor} ${darkMode ? 'border-white/10' : 'border-gold-300'}` : "bg-gold-200 border-gold-300"
+            )} 
                  title={lang === 'ar' ? "إعادة تعيين" : "Reset Account"}
                  onClick={onReset}>
-              {user?.name?.[0] || (lang === 'ar' ? 'ت' : 'U')}
+              {userRank ? (
+                <userRank.icon className={cn("w-6 h-6", userRank.color)} />
+              ) : (
+                user?.name?.[0] || 'U'
+              )}
             </div>
             <div className="min-w-0">
               <p className={cn("text-sm font-bold truncate", darkMode ? "text-gold-100" : "text-gray-800")}>
                 {user?.name || (lang === 'ar' ? 'التاجر الكبير' : 'Grand Trader')}
               </p>
-              <p className="text-xs text-gold-600 truncate">{user?.balance?.toLocaleString()} {t.balance}</p>
+              <div className="flex flex-col">
+                <p className="text-[10px] font-black uppercase text-gold-600 truncate leading-tight">
+                  {userRank?.title}
+                </p>
+                <p className="text-[10px] text-gray-400 truncate">{user?.balance?.toLocaleString()} {t.balance}</p>
+              </div>
             </div>
           </div>
           <button 

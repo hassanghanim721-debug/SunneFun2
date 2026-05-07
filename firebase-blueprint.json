@@ -37,13 +37,15 @@
       "type": "object",
       "properties": {
         "ownerId": { "type": "string" },
+        "itemId": { "type": "string" },
         "name": { "type": "string" },
         "type": { "type": "string", "enum": ["house", "ship", "caravan"] },
         "category": { "type": "string" },
         "price": { "type": "number" },
-        "purchasedAt": { "type": "string", "format": "date-time" }
+        "purchasedAt": { "type": "string", "format": "date-time" },
+        "lastRentCollectedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["ownerId", "name", "type", "category", "price", "purchasedAt"]
+      "required": ["ownerId", "itemId", "name", "type", "category", "price", "purchasedAt", "lastRentCollectedAt"]
     },
     "TradeLog": {
       "title": "TradeLog",
@@ -56,7 +58,7 @@
         "amount": { "type": "number" },
         "profitPercent": { "type": "number" },
         "profitDinars": { "type": "number" },
-        "type": { "type": "string", "enum": ["start", "completion"] },
+        "type": { "type": "string", "enum": ["start", "completion", "sell", "rent"] },
         "timestamp": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "userName", "routeName", "amount", "type", "timestamp"]
