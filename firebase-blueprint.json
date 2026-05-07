@@ -1,0 +1,83 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Information about the trader.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "The trader's name." },
+        "email": { "type": "string", "format": "email", "description": "Contact email." },
+        "balance": { "type": "number", "description": "Total Dinars in the treasury." },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "email", "balance", "createdAt", "updatedAt"]
+    },
+    "Investment": {
+      "title": "Investment",
+      "description": "Stake in a trade convoy.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "amount": { "type": "number" },
+        "profit": { "type": "number" },
+        "status": { "type": "string", "enum": ["Preparing", "En route", "Nearing Port", "Completed", "Delayed"] },
+        "routeId": { "type": "string" },
+        "startTime": { "type": "number" },
+        "expiresAt": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "name", "amount", "profit", "status", "routeId", "startTime", "expiresAt", "createdAt", "updatedAt"]
+    },
+    "Property": {
+      "title": "Property",
+      "description": "Owned houses or ships.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["house", "ship", "caravan"] },
+        "category": { "type": "string" },
+        "price": { "type": "number" },
+        "purchasedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "name", "type", "category", "price", "purchasedAt"]
+    },
+    "TradeLog": {
+      "title": "TradeLog",
+      "description": "History of trades for tracking and admin review.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "routeName": { "type": "string" },
+        "amount": { "type": "number" },
+        "profitPercent": { "type": "number" },
+        "profitDinars": { "type": "number" },
+        "type": { "type": "string", "enum": ["start", "completion"] },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "userName", "routeName", "amount", "type", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles and balances."
+    },
+    "/investments/{investmentId}": {
+      "schema": "Investment",
+      "description": "Active and past trade investments."
+    },
+    "/properties/{propertyId}": {
+      "schema": "Property",
+      "description": "Purchased assets like houses and ships."
+    },
+    "/tradeLogs/{logId}": {
+      "schema": "TradeLog",
+      "description": "Trade history logs for users and admins."
+    }
+  }
+}

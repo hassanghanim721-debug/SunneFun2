@@ -1,0 +1,46 @@
+@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@400;700;900&family=Inter:wght@300;400;500;600&family=Playfair+Display:ital,wght@0,400;0,700;1,400&display=swap');
+
+@theme {
+  --font-display: "Cinzel Decorative", serif;
+  --font-serif: "Playfair Display", serif;
+  --font-sans: "Inter", sans-serif;
+  
+  --color-gold-50: #fffcf0;
+  --color-gold-100: #fdf5d3;
+  --color-gold-200: #fbe6a1;
+  --color-gold-300: #f7d266;
+  --color-gold-400: #f3b835;
+  --color-gold-500: #d49a1a;
+  --color-gold-600: #bb7d14;
+  --color-gold-700: #9a5e14;
+  --color-gold-800: #7f4c17;
+  --color-gold-900: #6a3f18;
+  
+  --color-sand: #fdfcf7;
+  --color-parchment: #f4f1ea;
+  --shadow-gold: 0 0 20px rgba(212, 175, 55, 0.2);
+  
+  --breakpoint-xs: 375px;
+}
+
+@layer base {
+  body {
+    @apply bg-parchment text-gray-900 selection:bg-gold-200;
+  }
+}
+
+.arabian-border {
+  border-image: linear-gradient(to bottom, #d4af37, #9a5e14) 1;
+  border-width: 2px;
+  border-style: solid;
+}
+
+.glass-panel {
+  @apply bg-white/80 backdrop-blur-md border border-white/20;
+}
+
+.ornament-pattern {
+  background-image: radial-gradient(circle at 2px 2px, #d4af37 1px, transparent 0);
+  background-size: 24px 24px;
+}
