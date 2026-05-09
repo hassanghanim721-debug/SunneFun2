@@ -70,7 +70,12 @@ export const TRANSLATIONS = {
     historyTab: 'Arrived',
     silkRoad: 'Silk Road',
     amberRoad: 'Amber Road',
-    gulfHarbor: 'Gulf Harbor'
+    gulfHarbor: 'Gulf Harbor',
+    level: 'Rank',
+    reset: 'Reset Data',
+    locked: 'Locked',
+    requiresLeader: 'Convoy Leader Required (250,000 D)',
+    secondaryMarket: 'Secondary Market'
   },
   ar: {
     title: 'قافلة',
@@ -115,7 +120,12 @@ export const TRANSLATIONS = {
     historyTab: 'وصلت',
     silkRoad: 'طريق الحرير',
     amberRoad: 'طريق العنبر',
-    gulfHarbor: 'الخليج'
+    gulfHarbor: 'الخليج',
+    level: 'الرتبة',
+    reset: 'إعادة تعيين البيانات',
+    locked: 'مقفل',
+    requiresLeader: 'تتطلب رتبة قائد قافلة (250,000 د)',
+    secondaryMarket: 'السوق الثانوي'
   }
 };
 

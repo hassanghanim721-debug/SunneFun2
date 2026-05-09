@@ -40,12 +40,12 @@ service cloud.firestore {
     function isValidUser(data) {
       let keys = data.keys();
       return keys.hasAll(['name', 'email', 'balance', 'createdAt', 'updatedAt']) 
-        && keys.size() == 5
         && data.name is string && data.name.size() > 0 && data.name.size() < 100
         && data.email is string && data.email.size() < 200
         && data.balance is number
         && (data.createdAt == request.time || (resource != null && data.createdAt == resource.data.createdAt))
-        && data.updatedAt == request.time;
+        && data.updatedAt == request.time
+        && (!keys.contains('rentCollectionsCount') || data.rentCollectionsCount is number);
     }
 
     function isValidInvestment(data) {
@@ -66,11 +66,11 @@ service cloud.firestore {
 
     function isValidProperty(data) {
       let keys = data.keys();
-      return keys.hasAll(['ownerId', 'name', 'type', 'category', 'price', 'purchasedAt'])
+      return keys.hasAll(['ownerId', 'name', 'price', 'purchasedAt'])
         && data.ownerId == request.auth.uid
         && data.name is string && data.name.size() < 100
-        && data.type in ['house', 'ship', 'caravan']
-        && data.category is string
+        && (!keys.contains('type') || data.type in ['house', 'ship', 'caravan'])
+        && (!keys.contains('category') || data.category is string)
         && data.price is number && data.price >= 0
         && (data.purchasedAt is timestamp || data.purchasedAt is string)
         && (!keys.contains('itemId') || data.itemId is string)
@@ -92,10 +92,10 @@ service cloud.firestore {
       allow create: if isSignedIn() && request.auth.uid == userId && isValidUser(incoming());
       allow update: if ((isSignedIn() && request.auth.uid == userId) || isAdmin())
         && isValidUser(incoming()) 
-        && (isAdmin() || incoming().createdAt == existing().createdAt)
-        && (isAdmin() || incoming().email == existing().email)
+        && (isAdmin() || incoming().createdAt == (existing() == null ? incoming().createdAt : existing().createdAt))
+        && (isAdmin() || incoming().email == (existing() == null ? incoming().email : existing().email))
         && (
-          isAdmin() || (incoming().diff(existing()).affectedKeys().hasOnly(['balance', 'updatedAt', 'name']))
+          isAdmin() || (incoming().diff(existing()).affectedKeys().hasAll(['updatedAt']) && incoming().diff(existing()).affectedKeys().hasAny(['balance', 'updatedAt', 'name', 'rentCollectionsCount']))
         );
     }
 
@@ -137,6 +137,11 @@ service cloud.firestore {
       allow list: if (isSignedIn() && resource.data.userId == request.auth.uid) || isAdmin();
       allow get: if (isSignedIn() && resource.data.userId == request.auth.uid) || isAdmin();
       allow delete: if isAdmin();
+    }
+
+    match /globalState/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && docId == 'propertyStats';
     }
   }
 }

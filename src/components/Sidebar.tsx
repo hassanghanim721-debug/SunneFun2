@@ -28,7 +28,7 @@ export const Sidebar: React.FC<SidebarProps & { isOpen?: boolean; onClose?: () =
 }) => {
   const t = TRANSLATIONS[lang];
 
-  const getUserRank = (balance: number) => {
+  const getUserRank = (balance: number = 0) => {
     if (balance >= 500000) {
       return {
         title: lang === 'ar' ? 'سلطان' : 'Sultan',
@@ -53,7 +53,7 @@ export const Sidebar: React.FC<SidebarProps & { isOpen?: boolean; onClose?: () =
     };
   };
 
-  const userRank = user ? getUserRank(user.balance) : null;
+  const userRank = user ? getUserRank(user?.balance || 0) : null;
   
   const menuItems = [
     { id: 'map', icon: MapIcon, label: t.tradeMap },
@@ -158,11 +158,15 @@ export const Sidebar: React.FC<SidebarProps & { isOpen?: boolean; onClose?: () =
             lang === 'ar' ? "flex-row-reverse text-right" : ""
           )}>
             <div className={cn(
-              "w-12 h-12 shrink-0 rounded-2xl flex items-center justify-center font-bold border transition-all cursor-pointer relative overflow-hidden",
+              "w-10 h-10 sm:w-12 sm:h-12 shrink-0 rounded-2xl flex items-center justify-center font-bold border transition-all cursor-pointer relative overflow-hidden",
               userRank ? `${userRank.bgColor} ${darkMode ? 'border-white/10' : 'border-gold-300'}` : "bg-gold-200 border-gold-300"
             )} 
-                 title={lang === 'ar' ? "إعادة تعيين" : "Reset Account"}
-                 onClick={onReset}>
+                 title={t.reset}
+                 onClick={() => {
+                   if (window.confirm(lang === 'ar' ? 'هل تريد إعادة تعيين كافة البيانات؟' : 'Reset all data?')) {
+                     onReset?.();
+                   }
+                 }}>
               {userRank ? (
                 <userRank.icon className={cn("w-6 h-6", userRank.color)} />
               ) : (
@@ -171,13 +175,13 @@ export const Sidebar: React.FC<SidebarProps & { isOpen?: boolean; onClose?: () =
             </div>
             <div className="min-w-0">
               <p className={cn("text-sm font-bold truncate", darkMode ? "text-gold-100" : "text-gray-800")}>
-                {user?.name || (lang === 'ar' ? 'التاجر الكبير' : 'Grand Trader')}
+                {user?.name || (lang === 'ar' ? 'تاجر نبيل' : 'Noble Trader')}
               </p>
               <div className="flex flex-col">
                 <p className="text-[10px] font-black uppercase text-gold-600 truncate leading-tight">
                   {userRank?.title}
                 </p>
-                <p className="text-[10px] text-gray-400 truncate">{user?.balance?.toLocaleString()} {t.balance}</p>
+                <p className="text-[10px] text-gray-400 truncate">{(user?.balance || 0).toLocaleString()} {t.balance}</p>
               </div>
             </div>
           </div>

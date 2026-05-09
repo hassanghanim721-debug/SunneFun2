@@ -78,7 +78,10 @@ export const TradeMap: React.FC<TradeMapProps> = ({ lang }) => {
           <motion.g
             animate={{ offsetDistance: ["0%", "100%"] }}
             transition={{ duration: 40, repeat: Infinity, ease: "linear" }}
-            style={{ offsetPath: "path('M 800 320 L 400 350')" }}
+            style={{ 
+              offsetPath: "path('M 800 320 L 400 350')",
+              offsetRotate: "0deg"
+            }}
           >
             <text className="text-xl">🐫</text>
           </motion.g>
@@ -87,7 +90,10 @@ export const TradeMap: React.FC<TradeMapProps> = ({ lang }) => {
           <motion.g
             animate={{ offsetDistance: ["0%", "100%"] }}
             transition={{ duration: 25, repeat: Infinity, ease: "linear" }}
-            style={{ offsetPath: "path('M 800 800 L 550 500')" }}
+            style={{ 
+              offsetPath: "path('M 800 800 L 550 500')",
+              offsetRotate: "0deg"
+            }}
           >
             <text className="text-xl">⛵</text>
           </motion.g>

@@ -1,13 +1,13 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { Landmark, Languages } from 'lucide-react';
 import { auth, googleProvider } from '@/src/lib/firebase';
-import { signInWithPopup } from 'firebase/auth';
+import { signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
 import { TRANSLATIONS } from '@/src/constants';
 import { cn } from '@/src/lib/utils';
 
 interface AuthProps {
-  onAuthComplete: (user: any) => void;
+  onAuthComplete: (user: any, isTentative?: boolean) => void;
   lang: 'en' | 'ar';
   setLang: (lang: 'en' | 'ar') => void;
 }
@@ -15,15 +15,55 @@ interface AuthProps {
 export const Auth: React.FC<AuthProps> = ({ onAuthComplete, lang, setLang }) => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [lastUser, setLastUser] = useState<{uid: string, name: string, photo: string, email: string} | null>(null);
   const t = TRANSLATIONS[lang];
+
+  useEffect(() => {
+    const savedUser = localStorage.getItem('qafila_last_user');
+    if (savedUser) {
+      try {
+        setLastUser(JSON.parse(savedUser));
+      } catch (e) {
+        console.error("Failed to parse saved user", e);
+      }
+    }
+  }, []);
+
+  const handleQuickReconnect = async () => {
+    if (!lastUser) return;
+    setLoading(true);
+    setError('');
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({
+      login_hint: lastUser.email
+    });
+    try {
+      const result = await signInWithPopup(auth, provider);
+      onAuthComplete(result.user);
+      setLoading(false);
+    } catch (err: any) {
+      console.error(err);
+      setError(lang === 'ar' ? 'فشل تسجيل الدخول. حاول مجدداً.' : 'Login failed. Please try again.');
+      setLoading(false);
+    }
+  };
 
   const handleGoogleLogin = async () => {
     setLoading(true);
     setError('');
+    const provider = new GoogleAuthProvider();
+    if (lastUser?.email) {
+      provider.setCustomParameters({
+        login_hint: lastUser.email
+      });
+    }
     try {
-      await signInWithPopup(auth, googleProvider);
+      const result = await signInWithPopup(auth, provider);
+      onAuthComplete(result.user);
+      setLoading(false);
     } catch (err: any) {
-      setError(err.message || 'Failed to sign in');
+      console.error(err);
+      setError(lang === 'ar' ? 'فشل تسجيل الدخول. حاول مجدداً.' : 'Login failed. Please try again.');
       setLoading(false);
     }
   };
@@ -71,6 +111,30 @@ export const Auth: React.FC<AuthProps> = ({ onAuthComplete, lang, setLang }) => 
         </div>
 
         <div className="p-8">
+          {lastUser && !loading && (
+            <motion.button 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={handleQuickReconnect}
+              className="w-full mb-8 p-4 rounded-2xl bg-gold-50 border border-gold-400 flex items-center gap-4 transition-all hover:bg-gold-100 hover:shadow-md group text-right"
+            >
+              <img 
+                src={lastUser.photo || "https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&f=y"} 
+                className="w-12 h-12 rounded-full border-2 border-gold-600 shadow-sm"
+                alt={lastUser.name} 
+              />
+              <div className="flex-1 min-w-0">
+                <p className="text-[10px] font-black text-gold-600 uppercase tracking-widest leading-none mb-1">
+                  {lang === 'ar' ? 'مرحباً بعودتك' : 'Welcome Back'}
+                </p>
+                <h4 className="font-serif font-bold text-gray-900 truncate tracking-tight">{lastUser.name}</h4>
+                <p className="text-[10px] text-gray-500 truncate">{lastUser.email}</p>
+              </div>
+            </motion.button>
+          )}
+
           <div className="text-center mb-8">
              <h3 className="font-serif text-xl font-bold text-gray-800 italic">{t.loginTitle}</h3>
              <p className="text-sm text-gray-500 mt-2">{t.loginSubtitle}</p>
@@ -82,8 +146,20 @@ export const Auth: React.FC<AuthProps> = ({ onAuthComplete, lang, setLang }) => 
             className="w-full py-4 bg-white border-2 border-gold-400 text-gold-900 font-display font-bold text-lg rounded-xl hover:bg-gold-50 transition-all shadow-lg flex items-center justify-center gap-3 disabled:opacity-50"
           >
             <img src="https://www.google.com/favicon.ico" className="w-5 h-5" alt="Google" />
-            {loading ? (lang === 'ar' ? 'جاري الدخول...' : 'Entering Oasis...') : t.googleLogin}
+            {loading ? (lang === 'ar' ? 'جاري الدخول...' : 'Entering Oasis...') : (lastUser ? (lang === 'ar' ? `دخول باسم ${lastUser.name.split(' ')[0]}` : `Sign in as ${lastUser.name.split(' ')[0]}`) : t.googleLogin)}
           </button>
+
+          {lastUser && !loading && (
+            <button 
+              onClick={() => {
+                localStorage.removeItem('qafila_last_user');
+                setLastUser(null);
+              }}
+              className="w-full mt-4 text-[10px] font-black text-gray-400 uppercase tracking-widest hover:text-red-500 transition-colors"
+            >
+              {lang === 'ar' ? 'استخدام حساب آخر' : 'Use another account'}
+            </button>
+          )}
 
           {error && (
             <p className="mt-4 text-center text-xs text-red-500 font-bold bg-red-50 p-2 rounded-lg border border-red-100">

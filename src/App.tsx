@@ -8,10 +8,10 @@ import { Sidebar } from './components/Sidebar';
 import { TradeMap } from './components/TradeMap';
 import { Auth } from './components/Auth';
 import { motion, AnimatePresence } from 'motion/react';
-import { ShoppingBag, Wallet, Coins, Landmark, Ship, Home, TrendingUp, AlertCircle, CheckCircle2, Menu, X, Moon, Sun, Crown, Gem, Store, User } from 'lucide-react';
+import { ShoppingBag, Wallet, Coins, Landmark, Ship, Home, TrendingUp, AlertCircle, CheckCircle2, Menu, X, Moon, Sun, Crown, Gem, Store, User, Bell } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
 import { auth, db, handleFirestoreError, OperationType } from '@/src/lib/firebase';
-import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { onAuthStateChanged, signOut, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
 import { 
   doc, 
   onSnapshot, 
@@ -46,9 +46,16 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [newName, setNewName] = useState('');
+  const [globalStats, setGlobalStats] = useState<any>(null);
   const [currentTime, setCurrentTime] = useState(Date.now());
   const [persistentNotifications, setPersistentNotifications] = useState<any[]>([]);
+  const [dismissedNotifications, setDismissedNotifications] = useState<Set<string>>(new Set());
   const [tradeLogs, setTradeLogs] = useState<any[]>([]);
+  const [isNotificationMenuOpen, setIsNotificationMenuOpen] = useState(false);
+
+  const isConvoyLeader = (profile?.balance || 0) >= 250000;
+
+  const hasAutoCollect = (profile?.rentCollectionsCount || 0) >= 10;
 
   useEffect(() => {
     const isDark = localStorage.getItem('darkMode') === 'true';
@@ -61,7 +68,7 @@ export default function App() {
 
   const t = TRANSLATIONS[lang];
   
-  const getUserRank = (balance: number) => {
+  const getUserRank = (balance: number = 0) => {
     if (balance >= 500000) {
       return {
         title: lang === 'ar' ? 'سلطان' : 'Sultan',
@@ -99,14 +106,23 @@ export default function App() {
 
   useEffect(() => {
     let unsubs: (() => void)[] = [];
+
     const unsubscribeAuth = onAuthStateChanged(auth, async (authenticatedUser) => {
-      // Clear previous listners if any
+      // Clear previous listeners if any
       unsubs.forEach(unsub => unsub());
       unsubs = [];
 
-      setLoading(true);
       if (authenticatedUser) {
+        setLoading(true);
         setUser(authenticatedUser);
+        
+        // Save user info for faster future login (account remembering)
+        localStorage.setItem('qafila_last_user', JSON.stringify({
+          uid: authenticatedUser.uid,
+          name: authenticatedUser.displayName,
+          photo: authenticatedUser.photoURL,
+          email: authenticatedUser.email
+        }));
         
         // Sync Profile
         const userDocRef = doc(db, 'users', authenticatedUser.uid);
@@ -116,18 +132,24 @@ export default function App() {
               name: authenticatedUser.displayName || 'Noble Trader',
               email: authenticatedUser.email,
               balance: 100000,
+              rentCollectionsCount: 0,
               createdAt: serverTimestamp(),
               updatedAt: serverTimestamp()
             };
             try {
               await setDoc(userDocRef, newProfile);
             } catch (err) {
+              setLoading(false);
               handleFirestoreError(err, OperationType.WRITE, `users/${authenticatedUser.uid}`);
             }
           } else {
-            setProfile(snapshot.data());
+            const data = snapshot.data();
+            setProfile(data);
+            localStorage.setItem('qafila_cached_profile', JSON.stringify(data));
+            setLoading(false);
           }
         }, (err) => {
+          setLoading(false);
           if (auth.currentUser) handleFirestoreError(err, OperationType.GET, `users/${authenticatedUser.uid}`);
         });
         unsubs.push(unsubscribeProfile);
@@ -161,8 +183,27 @@ export default function App() {
         });
         unsubs.push(unsubscribeLogs);
 
-        setLoading(false);
+        // Sync Global Stats
+        const statsDocRef = doc(db, 'globalState', 'propertyStats');
+        const unsubscribeStats = onSnapshot(statsDocRef, (snapshot) => {
+          if (!snapshot.exists()) {
+            setDoc(statsDocRef, {
+              'nomad-tent': 0,
+              'merchant-loft': 0,
+              'oasis-inn': 0,
+              'royal-castle': 0,
+              'red-sea-dhow': 0,
+              'desert-caravan': 0
+            }).catch(() => {});
+          } else {
+            setGlobalStats(snapshot.data());
+          }
+        }, (err) => {
+          if (auth.currentUser) handleFirestoreError(err, OperationType.GET, 'globalState/propertyStats');
+        });
+        unsubs.push(unsubscribeStats);
       } else {
+        // If logged out, clear everything
         setUser(null);
         setProfile(null);
         setActiveInvestments([]);
@@ -187,6 +228,7 @@ export default function App() {
 
   useEffect(() => {
     const timer = setInterval(async () => {
+      if (!profile || !user) return;
       const now = Date.now();
       setCurrentTime(now);
       
@@ -220,7 +262,7 @@ export default function App() {
             const logRef = doc(collection(db, 'tradeLogs'));
             batch.set(logRef, {
               userId: user.uid,
-              userName: profile.name,
+              userName: profile?.name || 'Trader',
               routeName: getRouteName(inv.routeId),
               amount: inv.amount,
               profitPercent: inv.profit,
@@ -239,15 +281,9 @@ export default function App() {
 
           await batch.commit();
           
+          {/* Removed auto-hide to keep them in notification center */}
           setPersistentNotifications(prev => [...prev, ...completions]);
           
-          // Auto hide after 5 seconds
-          completions.forEach(c => {
-            setTimeout(() => {
-              setPersistentNotifications(prev => prev.filter(n => n.id !== c.id));
-            }, 5000);
-          });
-
         } catch (err) {
           console.error("Failed to process batch maturation:", err);
         } finally {
@@ -255,16 +291,24 @@ export default function App() {
         }
       }
 
-      // Periodically notify about rent
+      // Periodically notify about rent or auto-collect
       properties.forEach(prop => {
-        const lastCollected = prop.lastRentCollectedAt?.toMillis() || prop.purchasedAt?.toMillis() || now;
-        if (now - lastCollected >= 3600000) { // 1 hour
-          const hours = Math.floor((now - lastCollected) / 3600000);
-          if (hours > 0 && !persistentNotifications.some(n => n.id === `rent-${prop.id}`)) {
+        const lastCollected = getTimestampMills(prop.lastRentCollectedAt || prop.purchasedAt);
+        const hours = Math.floor((now - lastCollected) / 3600000);
+        
+        if (hours > 0) {
+          const currentRent = hours * Math.floor(prop.price * 0.05);
+          
+          if (hasAutoCollect) {
+            // Auto collect logic
+            if (!isProcessing) {
+              handleCollectRent(prop.id, prop.name, prop.price, currentRent, true);
+            }
+          } else if (!dismissedNotifications.has(`rent-${prop.id}`) && !persistentNotifications.some(n => n.id === `rent-${prop.id}`)) {
             const rentNotif = {
               id: `rent-${prop.id}`,
               name: prop.name,
-              profit: hours * Math.floor(prop.price * 0.05),
+              profit: currentRent,
               type: 'rent'
             };
             setPersistentNotifications(prev => [...prev, rentNotif]);
@@ -275,9 +319,40 @@ export default function App() {
     return () => clearInterval(timer);
   }, [activeInvestments, properties, user, profile, isProcessing, persistentNotifications, lang]);
 
+  const ensureAuthenticated = async () => {
+    if (auth.currentUser) return true;
+    
+    // Trigger Google login now
+    setNotification({ 
+      type: 'success', 
+      message: lang === 'ar' ? 'يرجى تأكيد هويتك للمتابعة...' : 'Please verify your identity to continue...' 
+    });
+    
+    try {
+      const provider = new GoogleAuthProvider();
+      if (user?.email) {
+        provider.setCustomParameters({
+          login_hint: user.email
+        });
+      }
+      const result = await signInWithPopup(auth, provider);
+      if (result.user) {
+        setUser(result.user);
+        return true;
+      }
+    } catch (err) {
+      console.error("lazy auth failed", err);
+      setNotification({ type: 'error', message: lang === 'ar' ? 'فشل التحقق من الهوية' : 'Identity verification failed' });
+    }
+    return false;
+  };
+
   const handleInvest = async (amount: number, name: string, routeId: string, profit: number, durationMinutes: number) => {
     if (!profile || !user || isProcessing) return;
     
+    const isVerified = await ensureAuthenticated();
+    if (!isVerified) return;
+
     const totalCost = amount * tradeQuantity;
     
     if (profile.balance >= totalCost) {
@@ -345,11 +420,48 @@ export default function App() {
   };
 
   const handlePurchase = async (item: { id: string, name: string, price: number, type?: string, category?: string }) => {
-    if (!profile || !user) return;
+    if (!profile || !user || isProcessing) return;
+
+    const isVerified = await ensureAuthenticated();
+    if (!isVerified) return;
+
+    const CAPS: Record<string, number> = {
+      'nomad-tent': 8000, // Using nomad-tent as simple house for now
+      'merchant-loft': 1000,
+      'oasis-inn': 500, // Using oasis-inn as villa
+      'royal-castle': 500
+    };
+
+    const currentCount = globalStats?.[item.id] || 0;
+    const cap = CAPS[item.id] || 999999;
+
+    if (currentCount >= cap) {
+      setNotification({ 
+        type: 'error', 
+        message: lang === 'ar' 
+          ? 'نفدت جميع الوحدات المتاحة! ابحث عنها في السوق الثانوي.' 
+          : 'All units sold out! Look for them in the secondary market.' 
+      });
+      return;
+    }
 
     if (profile.balance >= item.price) {
+      if (item.id === 'royal-castle' && !isConvoyLeader) {
+        setNotification({ 
+          type: 'error', 
+          message: lang === 'ar' 
+            ? 'يجب أن تكون "قائد قافلة" (رصيد 250,000) لامتلاك القصور الملكية.' 
+            : 'You must be a "Convoy Leader" (250,000 balance) to own Royal Castles.' 
+        });
+        return;
+      }
+
+      setIsProcessing(true);
       try {
-        const propertyData = {
+        const batch = writeBatch(db);
+        
+        const propertyRef = doc(collection(db, 'properties'));
+        batch.set(propertyRef, {
           ownerId: user.uid,
           itemId: item.id,
           name: item.name,
@@ -358,16 +470,21 @@ export default function App() {
           price: item.price,
           purchasedAt: serverTimestamp(),
           lastRentCollectedAt: serverTimestamp()
-        };
-        
-        await addDoc(collection(db, 'properties'), propertyData);
-        await updateDoc(doc(db, 'users', user.uid), {
-          balance: profile.balance - item.price,
+        });
+
+        batch.update(doc(db, 'users', user.uid), {
+          balance: increment(-item.price),
           updatedAt: serverTimestamp()
         });
 
+        // Update global count
+        batch.update(doc(db, 'globalState', 'propertyStats'), {
+          [item.id]: increment(1)
+        });
+
         // Log purchase
-        await addDoc(collection(db, 'tradeLogs'), {
+        const logRef = doc(collection(db, 'tradeLogs'));
+        batch.set(logRef, {
           userId: user.uid,
           userName: profile.name,
           routeName: item.name,
@@ -376,16 +493,19 @@ export default function App() {
           timestamp: new Date().toISOString()
         });
 
+        await batch.commit();
         setNotification({ type: 'success', message: lang === 'ar' ? `تم امتلاك ${item.name} بنجاح!` : `${item.name} acquired successfully!` });
       } catch (err) {
         handleFirestoreError(err, OperationType.WRITE, 'properties');
+      } finally {
+        setIsProcessing(false);
       }
     } else {
       setNotification({ type: 'error', message: lang === 'ar' ? 'يطلب التاجر المزيد من الذهب لهذا.' : 'The Merchant demands more gold for this.' });
     }
   };
 
-  const handleSellProperty = async (propId: string, name: string, marketValue: number) => {
+  const handleSellProperty = async (propId: string, itemId: string, name: string, marketValue: number) => {
     if (!profile || !user || isProcessing) return;
     
     const sellPrice = Math.floor(marketValue * 0.9);
@@ -397,6 +517,11 @@ export default function App() {
       batch.update(doc(db, 'users', user.uid), {
         balance: increment(sellPrice),
         updatedAt: serverTimestamp()
+      });
+
+      // Update global count (it returns to the bank)
+      batch.update(doc(db, 'globalState', 'propertyStats'), {
+        [itemId]: increment(-1)
       });
 
       // Log the sale
@@ -419,10 +544,14 @@ export default function App() {
     }
   };
 
-  const handleCollectRent = async (propId: string, name: string, marketValue: number, currentRent: number) => {
+  const handleCollectRent = async (propId: string, name: string, marketValue: number, currentRent: number, isAuto: boolean = false) => {
     if (!profile || !user || isProcessing || currentRent <= 0) return;
 
-    setIsProcessing(true);
+    if (!isAuto) {
+      const isVerified = await ensureAuthenticated();
+      if (!isVerified) return;
+      setIsProcessing(true);
+    }
     try {
       const batch = writeBatch(db);
       batch.update(doc(db, 'properties', propId), {
@@ -430,6 +559,7 @@ export default function App() {
       });
       batch.update(doc(db, 'users', user.uid), {
         balance: increment(currentRent),
+        rentCollectionsCount: increment(1),
         updatedAt: serverTimestamp()
       });
 
@@ -438,18 +568,21 @@ export default function App() {
       batch.set(logRef, {
         userId: user.uid,
         userName: profile.name,
-        routeName: `${name} (Rent)`,
+        routeName: `${name} (${isAuto ? 'Auto Rent' : 'Rent'})`,
         amount: currentRent,
         type: 'rent',
         timestamp: new Date().toISOString()
       });
 
       await batch.commit();
-      setNotification({ type: 'success', message: lang === 'ar' ? `تم تحصيل إيجار ${currentRent} ${t.currency}` : `Collected ${currentRent} ${t.currency} rent` });
+      if (!isAuto) {
+        setNotification({ type: 'success', message: lang === 'ar' ? `تم تحصيل إيجار ${currentRent} ${t.currency}` : `Collected ${currentRent} ${t.currency} rent` });
+      }
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, 'properties');
+      if (!isAuto) handleFirestoreError(err, OperationType.UPDATE, 'properties');
     } finally {
-      setIsProcessing(false);
+      // Small cooldown to prevent rapid multi-clicks
+      setTimeout(() => setIsProcessing(false), 500);
     }
   };
 
@@ -514,6 +647,7 @@ export default function App() {
     { id: 'sultan_wealth', icon: Crown, title: lang === 'ar' ? 'ثروة سلطان' : 'Sultan Wealth', desc: lang === 'ar' ? 'تجاوز رصيدك 500,000 دينار' : 'Balance exceeded 500,000 Dinars', check: (p: any, props: any[], logs: any[]) => p?.balance >= 500000, reward: 50000 },
     { id: 'industrialist', icon: Gem, title: lang === 'ar' ? 'رائد أعمال' : 'Industrialist', desc: lang === 'ar' ? 'امتلك قافلة الصحراء' : 'Own a Desert Caravan', check: (p: any, props: any[], logs: any[]) => props.some(pr => pr.itemId === 'desert-caravan'), reward: 25000 },
     { id: 'veteran', icon: TrendingUp, title: lang === 'ar' ? 'تاجر متمرس' : 'Veteran Trader', desc: lang === 'ar' ? 'أكمل 10 رحلات تجارية' : 'Complete 10 trade convoys', check: (p: any, props: any[], logs: any[]) => logs.filter(l => l.type === 'completion').length >= 10, reward: 20000 },
+    { id: 'master_collector', icon: Bell, title: lang === 'ar' ? 'جامع الإيجار المحترف' : 'Master Collector', desc: lang === 'ar' ? 'حصل الإيجار 10 مرات لفتح التحصيل التلقائي' : 'Collect rent 10 times to unlock Auto-Collect', check: (p: any, props: any[], logs: any[]) => (p?.rentCollectionsCount || 0) >= 10, reward: 5000 },
   ];
 
   const earnedAchievements = profile ? ACHIEVEMENTS.filter(a => a.check(profile, properties, tradeLogs)) : [];
@@ -575,6 +709,18 @@ export default function App() {
     const rentableHours = Math.floor(hoursElapsed);
     const currentRent = rentableHours * Math.floor((item.price || 0) * 0.05);
 
+    const CAPS: Record<string, number> = {
+      'nomad-tent': 8000,
+      'merchant-loft': 1000,
+      'oasis-inn': 500,
+      'royal-castle': 500
+    };
+
+    const currentCount = globalStats?.[item.id] || 0;
+    const cap = CAPS[item.id];
+    const isSoldOut = cap !== undefined && currentCount >= cap;
+    const isLocked = item.id === 'royal-castle' && !isConvoyLeader;
+
     const propertyMap: Record<string, { en: string, ar: string }> = {
       'oasis-inn': { en: 'Oasis Inn', ar: 'نزل الواحة' },
       'merchant-loft': { en: 'Merchant Loft', ar: 'نزل التاجر' },
@@ -588,6 +734,8 @@ export default function App() {
       ? propertyMap[item.id][lang] 
       : item.name;
 
+    const lockExplanation = isLocked ? t.requiresLeader : null;
+
     return (
       <div className={cn(
         "glass-panel p-6 rounded-3xl border transition-all group shadow-sm flex flex-col h-full",
@@ -598,18 +746,43 @@ export default function App() {
           <div className="flex items-center gap-3">
             <div className={cn(
               "w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-110",
-              darkMode ? "bg-gold-900/20 text-gold-400" : "bg-gold-50 text-gold-700"
+              darkMode ? "bg-gold-900/20 text-gold-400" : "bg-gold-50 text-gold-700",
+              isSoldOut && !isOwned ? "grayscale opacity-50" : "",
+              isLocked ? "bg-gray-100 text-gray-400 grayscale" : ""
             )}>
-              {item.type === 'ship' ? <Ship size={24} /> : <Home size={24} />}
+              {isLocked ? <AlertCircle size={24} /> : (item.type === 'ship' ? <Ship size={24} /> : <Home size={24} />)}
             </div>
             <div>
               <h4 className="font-serif font-bold text-lg leading-tight">{localizedName}</h4>
-              <p className="text-[10px] text-gold-600 font-black uppercase tracking-widest">{item.category || 'Legacy'}</p>
+              <p className={cn(
+                "text-[10px] font-black uppercase tracking-widest",
+                isLocked ? "text-red-500" : "text-gold-600"
+              )}>
+                {isLocked ? t.requiresLeader : (item.category || 'Legacy')}
+              </p>
+              {cap !== undefined && (
+                <div className="flex items-center gap-1 mt-1">
+                  <div className="h-1 w-12 bg-gray-200 rounded-full overflow-hidden">
+                    <div 
+                      className={cn("h-full", isSoldOut ? "bg-red-500" : "bg-gold-500")} 
+                      style={{ width: `${Math.min(100, (currentCount / cap) * 100)}%` }} 
+                    />
+                  </div>
+                  <span className="text-[8px] text-gray-400 font-bold uppercase">
+                    {cap - currentCount} {lang === 'ar' ? 'متبقي' : 'Left'}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
           {isOwned && (
             <div className="bg-green-100 text-green-700 text-[8px] font-black uppercase px-2 py-1 rounded-full tracking-wider animate-pulse">
               {t.owned}
+            </div>
+          )}
+          {isSoldOut && !isOwned && (
+            <div className="bg-red-100 text-red-700 text-[8px] font-black uppercase px-2 py-1 rounded-full tracking-wider">
+              {lang === 'ar' ? 'نفدت' : 'Sold Out'}
             </div>
           )}
         </div>
@@ -625,14 +798,17 @@ export default function App() {
               </div>
               <button 
                 onClick={() => handlePurchase(item)}
+                disabled={isSoldOut || isLocked}
                 className={cn(
                   "px-6 py-3 rounded-xl text-sm font-bold shadow-lg transition-all transform active:scale-95",
-                  item.type === 'ship' 
-                    ? "bg-gold-900 text-gold-100 hover:bg-black" 
-                    : "bg-gold-500 text-gold-950 hover:bg-gold-400"
+                  isSoldOut || isLocked ? "bg-gray-300 text-gray-500 cursor-not-allowed" : (
+                    item.type === 'ship' 
+                      ? "bg-gold-900 text-gold-100 hover:bg-black" 
+                      : "bg-gold-500 text-gold-950 hover:bg-gold-400"
+                  )
                 )}
               >
-                {item.type === 'house' ? t.rent : t.buy}
+                {isLocked ? t.locked : isSoldOut ? (lang === 'ar' ? 'مبيوع' : 'Sold') : (item.type === 'house' ? t.rent : t.buy)}
               </button>
             </div>
           ) : (
@@ -657,7 +833,7 @@ export default function App() {
                   {lang === 'ar' ? 'تحصيل الإيجار' : 'Collect Rent'}
                 </button>
                 <button
-                  onClick={() => setConfirmingSell({ id: ownedInstance.id, name: localizedName, price: item.price })}
+                  onClick={() => setConfirmingSell({ id: ownedInstance.id, itemId: item.id, name: localizedName, price: item.price })}
                   disabled={isProcessing}
                   className="px-4 py-3 border border-red-200 text-red-500 rounded-xl text-xs font-bold hover:bg-red-50 transition-all active:scale-95"
                 >
@@ -679,6 +855,12 @@ export default function App() {
     );
   };
 
+  const onAuthComplete = (authenticatedUser: any) => {
+    setLoading(true);
+    setUser(authenticatedUser);
+    // Note: App.tsx's onAuthStateChanged listener will catch this and load the profile
+  };
+
   if (loading) {
     return (
       <div className="h-screen w-full bg-parchment flex items-center justify-center">
@@ -687,8 +869,8 @@ export default function App() {
     );
   }
 
-  if (!user || !profile) {
-    return <Auth lang={lang} setLang={setLang} onAuthComplete={(u) => setUser(u)} />;
+  if (!user || (!profile && user)) {
+    return <Auth lang={lang} setLang={setLang} onAuthComplete={onAuthComplete} />;
   }
 
   const toggleDarkMode = () => setDarkMode(!darkMode);
@@ -741,7 +923,108 @@ export default function App() {
             </div>
           </div>
           
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 sm:gap-3">
+            <div className="relative">
+              <button
+                onClick={() => setIsNotificationMenuOpen(!isNotificationMenuOpen)}
+                className={cn(
+                  "p-1.5 sm:p-2 rounded-full transition-all duration-300 relative",
+                  darkMode ? "bg-gold-900/30 text-gold-300 hover:bg-gold-900/50" : "bg-gold-100 text-gold-700 hover:bg-gold-200",
+                  isNotificationMenuOpen ? (darkMode ? "bg-gold-900/60" : "bg-gold-300") : ""
+                )}
+              >
+                <Bell size={16} className="sm:w-5 sm:h-5" />
+                {persistentNotifications.length > 0 && (
+                  <span className="absolute top-0 right-0 w-3 h-3 sm:w-4 h-4 bg-red-500 text-white text-[7px] sm:text-[8px] font-black rounded-full flex items-center justify-center border-2 border-parchment animate-pulse">
+                    {persistentNotifications.length}
+                  </span>
+                )}
+              </button>
+
+              <AnimatePresence>
+                {isNotificationMenuOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                    className={cn(
+                      "absolute top-full mt-2 w-[calc(100vw-2.5rem)] xs:w-80 max-h-[400px] overflow-y-auto rounded-3xl shadow-2xl z-50 border p-2",
+                      darkMode ? "bg-[#1a1410]/95 border-gold-900/50 backdrop-blur-xl" : "bg-white/95 border-gold-200 backdrop-blur-xl",
+                      lang === 'ar' ? "left-[-0.5rem] xs:left-0" : "right-[-0.5rem] xs:right-0"
+                    )}
+                  >
+                    <div className="p-4 border-b border-gold-100/10 flex justify-between items-center sticky top-0 bg-inherit z-10">
+                      <h4 className="font-serif font-bold text-lg">{lang === 'ar' ? 'تنبيهات القافلة' : 'Caravan Alerts'}</h4>
+                      {persistentNotifications.length > 0 && (
+                        <button 
+                          onClick={() => {
+                            setPersistentNotifications([]);
+                            const newDismissed = new Set(dismissedNotifications);
+                            persistentNotifications.forEach(n => newDismissed.add(n.id));
+                            setDismissedNotifications(newDismissed);
+                          }}
+                          className="text-[10px] uppercase font-black text-gold-600 hover:text-gold-800 transition-colors"
+                        >
+                          {lang === 'ar' ? 'مسح الكل' : 'Clear All'}
+                        </button>
+                      )}
+                    </div>
+                    <div className="py-2 space-y-1">
+                      {persistentNotifications.length === 0 ? (
+                        <div className="p-8 text-center text-gray-400 italic text-sm">
+                          {lang === 'ar' ? 'لا توجد تنبيهات جديدة' : 'No new notifications'}
+                        </div>
+                      ) : (
+                        persistentNotifications.map(notif => (
+                          <div
+                            key={notif.id}
+                            className={cn(
+                              "flex items-center justify-between gap-3 p-3 rounded-2xl transition-colors group",
+                              darkMode ? "hover:bg-gold-900/20" : "hover:bg-gold-50"
+                            )}
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className={cn(
+                                "w-10 h-10 rounded-full flex items-center justify-center shrink-0",
+                                notif.type === 'rent' ? "bg-blue-500/20 text-blue-500" : "bg-green-500/20 text-green-500"
+                              )}>
+                                {notif.type === 'rent' ? <Landmark size={20} /> : <TrendingUp size={20} />}
+                              </div>
+                              <div className="min-w-0">
+                                <h5 className={cn(
+                                  "font-bold text-xs leading-tight line-clamp-1",
+                                  darkMode ? "text-gold-100" : "text-gray-900"
+                                )}>
+                                  {notif.type === 'rent' 
+                                    ? (lang === 'ar' ? `إيجار متاح: ${notif.name}` : `Rent available: ${notif.name}`)
+                                    : (lang === 'ar' ? `وصلت قافلة ${notif.name}!` : `Convoy ${notif.name} arrived!`)}
+                                </h5>
+                                <p className={cn(
+                                  "text-[10px] font-bold mt-0.5",
+                                  notif.type === 'rent' ? "text-blue-500" : "text-green-500"
+                                )}>
+                                  {notif.profit} {t.currency} {notif.type === 'rent' ? (lang === 'ar' ? 'إيجار' : 'rent') : (lang === 'ar' ? 'ربح' : 'profit')}
+                                </p>
+                              </div>
+                            </div>
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPersistentNotifications(prev => prev.filter(n => n.id !== notif.id));
+                                setDismissedNotifications(prev => new Set(prev).add(notif.id));
+                              }}
+                              className="p-1.5 opacity-0 group-hover:opacity-100 transition-all text-gray-400 hover:text-red-500"
+                            >
+                              <X size={14} />
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
             <button
               onClick={toggleDarkMode}
               className={cn(
@@ -752,84 +1035,38 @@ export default function App() {
               {darkMode ? <Sun size={18} /> : <Moon size={18} />}
             </button>
             <div className={cn(
-              "flex items-center gap-3 px-3 py-1.5 rounded-full border shadow-sm transition-all animate-in fade-in zoom-in duration-500",
+              "flex items-center gap-1 sm:gap-3 px-2 sm:px-3 py-1.5 rounded-full border shadow-sm transition-all animate-in fade-in zoom-in duration-500",
               darkMode ? "bg-black/40 border-gold-900/50" : "bg-white border-gold-200"
             )}>
               {userRank && (
                 <div className={cn(
-                  "flex items-center gap-2 px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-tighter",
+                  "flex items-center gap-1 sm:gap-2 px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-tighter",
                   userRank.bgColor,
                   userRank.color,
                   userRank.glow
                 )}>
-                  <userRank.icon size={12} />
-                  <span className="hidden xs:inline">{userRank.title}</span>
+                  <userRank.icon size={10} className="sm:w-3 sm:h-3" />
+                  <span className="hidden sm:inline">{userRank.title}</span>
                 </div>
               )}
-              <div className="h-4 w-px bg-gold-200/50 hidden xs:block" />
-              <div className="flex items-center gap-2">
-                <div className="w-5 h-5 rounded-full bg-gold-100/50 flex items-center justify-center">
-                  <Coins size={12} className="text-gold-600" />
+              <div className="h-3 w-px bg-gold-200/50 hidden xs:block" />
+              <div className="flex items-center gap-1.5">
+                <div className="w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-gold-100/50 flex items-center justify-center shrink-0">
+                  <Coins size={10} className="text-gold-600" />
                 </div>
                 <span className={cn(
-                  "font-bold text-sm",
+                  "font-bold text-xs sm:text-sm",
                   darkMode ? "text-gold-300" : "text-gold-900"
                 )}>
-                  {profile.balance.toLocaleString()} <span className="text-gold-600 font-medium hidden sm:inline">{t.balance}</span>
+                  {profile?.balance?.toLocaleString() || 0} <span className="text-gold-600 font-medium hidden md:inline">{t.balance}</span>
                 </span>
               </div>
             </div>
           </div>
         </header>
 
-        {/* Persistent Notifications Stack */}
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[60] flex flex-col gap-2 w-full max-w-md pointer-events-none px-4">
-          <AnimatePresence>
-            {persistentNotifications.map(notif => (
-              <motion.div
-                key={notif.id}
-                initial={{ opacity: 0, y: -20, scale: 0.95 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.2 } }}
-                className={cn(
-                  "pointer-events-auto flex items-center justify-between gap-4 p-4 rounded-2xl shadow-2xl border backdrop-blur-xl",
-                  darkMode 
-                    ? "bg-gold-900/40 border-gold-700/50 text-gold-100" 
-                    : "bg-white/95 border-gold-200 text-gold-900"
-                )}
-              >
-                <div className="flex items-center gap-3">
-                  <div className={cn(
-                    "w-10 h-10 rounded-full flex items-center justify-center",
-                    notif.type === 'rent' ? "bg-blue-500/20 text-blue-500" : "bg-green-500/20 text-green-500"
-                  )}>
-                    {notif.type === 'rent' ? <Landmark size={20} /> : <TrendingUp size={20} />}
-                  </div>
-                  <div>
-                    <h5 className="font-bold text-sm leading-tight">
-                      {notif.type === 'rent' 
-                        ? (lang === 'ar' ? `إيجار متاح: ${notif.name}` : `Rent available: ${notif.name}`)
-                        : (lang === 'ar' ? `وصلت قافلة ${notif.name}!` : `Convoy ${notif.name} arrived!`)}
-                    </h5>
-                    <p className={cn(
-                      "text-xs font-bold",
-                      notif.type === 'rent' ? "text-blue-500" : "text-green-500"
-                    )}>
-                      +{notif.profit} <span className="opacity-70">{t.currency}</span> {notif.type === 'rent' ? (lang === 'ar' ? 'إيجار' : 'rent') : (lang === 'ar' ? 'ربح' : 'profit')}
-                    </p>
-                  </div>
-                </div>
-                <button 
-                  onClick={() => setPersistentNotifications(prev => prev.filter(n => n.id !== notif.id))}
-                  className="p-2 hover:bg-black/5 rounded-lg transition-colors text-gray-400 hover:text-gray-600"
-                >
-                  <X size={16} />
-                </button>
-              </motion.div>
-            ))}
-          </AnimatePresence>
-        </div>
-
+        {/* Removed fixed notification stack as it's now in the header bell menu */}
+        
         <AnimatePresence>
           {notification && (
             <motion.div
@@ -919,7 +1156,7 @@ export default function App() {
                   </button>
                   <button 
                     onClick={() => {
-                      handleSellProperty(confirmingSell.id, confirmingSell.name, confirmingSell.price);
+                      handleSellProperty(confirmingSell.id, confirmingSell.itemId, confirmingSell.name, confirmingSell.price);
                       setConfirmingSell(null);
                     }}
                     disabled={isProcessing}
@@ -1008,7 +1245,7 @@ export default function App() {
                   </button>
                   <button 
                     onClick={() => handleInvest(confirmingTrade.cost, confirmingTrade.name, confirmingTrade.id, confirmingTrade.profit, confirmingTrade.duration)}
-                    disabled={isProcessing || profile.balance < (confirmingTrade.cost * tradeQuantity)}
+                    disabled={isProcessing || (profile?.balance || 0) < (confirmingTrade.cost * tradeQuantity)}
                     className="flex-1 py-4 bg-gold-900 text-white font-bold rounded-2xl hover:bg-black transition-all shadow-lg disabled:bg-gray-400 disabled:cursor-not-allowed"
                   >
                     {isProcessing ? (lang === 'ar' ? 'جاري التحميل...' : 'Loading...') : t.stake}
@@ -1036,35 +1273,69 @@ export default function App() {
                 {/* Investing Panel */}
                 <div className="flex-1 space-y-2 md:space-y-3 h-auto shrink-0 pb-6 overflow-y-auto">
                   {[
-                    { id: 'silk-road', name: t.silkRoad, routeName: lang === 'ar' ? 'طريق الحرير العظيم' : 'GREAT SILK ROUTE', color: 'text-red-700', arrowColor: '#b91c1c', cost: 1000, profit: 10, duration: 1 },
-                    { id: 'amber-road', name: t.amberRoad, routeName: lang === 'ar' ? 'مسار الكهرمان' : 'AMBER TRAIL', color: 'text-amber-600', arrowColor: '#d97706', cost: 2500, profit: 15, duration: 3 },
-                    { id: 'gulf-harbor-sea', name: t.gulfHarbor, routeName: lang === 'ar' ? 'مياه الخليج' : 'GULF WATERS', color: 'text-blue-700', arrowColor: '#1e40af', cost: 5000, profit: 25, duration: 5 }
-                  ].map((p, i) => (
-                    <div key={i} className="glass-panel px-4 md:px-6 py-3 md:py-4 rounded-[24px] border-gold-100 flex items-center justify-between group hover:border-gold-300 transition-all cursor-pointer shadow-sm bg-white"
-                         onClick={() => setConfirmingTrade(p)}>
-                      <div className="flex items-center gap-3 md:gap-4 flex-1">
-                        <div className="min-w-0">
-                          <p className={cn("text-[8px] md:text-[10px] font-black uppercase tracking-widest mb-0.5", p.color)}>{p.routeName}</p>
-                          <p className="font-serif font-bold text-lg md:text-xl text-gray-800 tracking-tight truncate">{p.name}</p>
+                    { id: 'silk-road', name: t.silkRoad, routeName: lang === 'ar' ? 'طريق الحرير العظيم' : 'GREAT SILK ROUTE', color: 'text-red-700', arrowColor: '#b91c1c', cost: 1000, profit: 10, duration: 1, minRank: 0 },
+                    { id: 'amber-road', name: t.amberRoad, routeName: lang === 'ar' ? 'مسار الكهرمان' : 'AMBER TRAIL', color: 'text-amber-600', arrowColor: '#d97706', cost: 2500, profit: 15, duration: 3, minRank: 0 },
+                    { id: 'gulf-harbor-sea', name: t.gulfHarbor, routeName: lang === 'ar' ? 'مياه الخليج' : 'GULF WATERS', color: 'text-blue-700', arrowColor: '#1e40af', cost: 5000, profit: 25, duration: 5, minRank: 250000 }
+                  ].map((p, i) => {
+                    const isRouteLocked = p.minRank > 0 && (profile?.balance || 0) < p.minRank;
+                    return (
+                      <div key={i} className={cn(
+                        "glass-panel px-4 md:px-6 py-3 md:py-4 rounded-[24px] border-gold-100 flex items-center justify-between group hover:border-gold-300 transition-all cursor-pointer shadow-sm relative overflow-hidden",
+                        isRouteLocked ? "bg-gray-100/50 grayscale" : "bg-white",
+                      )}
+                           onClick={() => {
+                             if (isRouteLocked) {
+                               setNotification({ 
+                                 type: 'error', 
+                                 message: lang === 'ar' 
+                                   ? 'يتطلب هذا المسار رتبة "قائد قافلة" (رصيد 250,000 دينار)' 
+                                   : 'This route requires "Convoy Leader" status (250,000 Dinars)' 
+                               });
+                             } else {
+                               setConfirmingTrade(p);
+                             }
+                           }}>
+                        <div className="flex items-center gap-3 md:gap-4 flex-1">
+                          <div className="min-w-0">
+                            <p className={cn("text-[8px] md:text-[10px] font-black uppercase tracking-widest mb-0.5", p.color)}>
+                              {isRouteLocked ? t.requiresLeader : p.routeName}
+                            </p>
+                            <p className="font-serif font-bold text-lg md:text-xl text-gray-800 tracking-tight truncate">{p.name}</p>
+                          </div>
+                        </div>
+
+                        {/* Curved Arrow Decoration */}
+                        <div className="flex-1 px-2 md:px-8 hidden sm:flex justify-center overflow-visible">
+                          {isRouteLocked ? (
+                            <div className="flex items-center gap-1 text-gray-400">
+                              <AlertCircle size={14} />
+                              <span className="text-[8px] font-bold uppercase tracking-widest">{lang === 'ar' ? 'مقفل' : 'Locked'}</span>
+                            </div>
+                          ) : (
+                            <svg width="100" height="40" viewBox="0 0 100 40" fill="none">
+                              <path d="M10,10 Q50,40 90,10" stroke={p.arrowColor} strokeWidth="3" strokeLinecap="round" />
+                              <path d="M82,10 L90,10 L88,18" stroke={p.arrowColor} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                          )}
+                        </div>
+
+                        <div className={cn("shrink-0 flex flex-col items-end", lang === 'ar' ? "mr-2 md:mr-4" : "ml-2 md:ml-4")}>
+                          <p className="text-lg md:text-xl font-bold text-gray-700 mb-1 md:mb-2">{p.cost} {t.currency}</p>
+                          <button 
+                            disabled={isRouteLocked}
+                            className={cn(
+                              "px-4 md:px-6 py-1.5 md:py-2 rounded-full font-bold text-[10px] md:text-xs uppercase tracking-widest transition-colors shadow-md",
+                              isRouteLocked 
+                                ? "bg-gray-300 text-gray-500 cursor-not-allowed" 
+                                : "bg-[#4a3728] text-white hover:bg-[#2d2118]"
+                            )}
+                          >
+                            {isRouteLocked ? t.locked : t.stake}
+                          </button>
                         </div>
                       </div>
-
-                      {/* Curved Arrow Decoration */}
-                      <div className="flex-1 px-4 md:px-8 hidden sm:flex justify-center overflow-visible">
-                        <svg width="100" height="40" viewBox="0 0 100 40" fill="none">
-                          <path d="M10,10 Q50,40 90,10" stroke={p.arrowColor} strokeWidth="3" strokeLinecap="round" />
-                          <path d="M82,10 L90,10 L88,18" stroke={p.arrowColor} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                      </div>
-
-                      <div className={cn("shrink-0 flex flex-col items-end", lang === 'ar' ? "mr-2 md:mr-4" : "ml-2 md:ml-4")}>
-                        <p className="text-lg md:text-xl font-bold text-gray-700 mb-1 md:mb-2">{p.cost} {t.currency}</p>
-                        <button className="bg-[#4a3728] text-white px-4 md:px-6 py-1.5 md:py-2 rounded-full font-bold text-[10px] md:text-xs uppercase tracking-widest hover:bg-[#2d2118] transition-colors shadow-md">
-                          {t.stake}
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </motion.div>
             )}
@@ -1222,11 +1493,12 @@ export default function App() {
                       <Home className="text-gold-600" size={24} />
                       <h3 className="font-display text-2xl text-gold-800">{t.estate}</h3>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6">
                       {[
-                        { id: 'oasis-inn', name: lang === 'ar' ? 'نزل الواحة' : 'Oasis Inn', price: 5000, desc: lang === 'ar' ? 'سكن فاخر في القمر' : 'Luxury living in Al-Qamar', type: 'house', category: 'Luxury' },
-                        { id: 'merchant-loft', name: lang === 'ar' ? 'نزل التاجر' : 'Merchant Loft', price: 2500, desc: lang === 'ar' ? 'مساحة مريحة قرب الأسواق' : 'Comfortable space near markets', type: 'house', category: 'Commercial' },
-                        { id: 'nomad-tent', name: lang === 'ar' ? 'خيمة الرحالة' : 'Nomad Tent', price: 300, desc: lang === 'ar' ? 'منزل متنقل بسيط' : 'A simple mobile home', type: 'house', category: 'Basic' }
+                        { id: 'oasis-inn', name: lang === 'ar' ? 'فيلا فخمة' : 'Grand Villa', price: 150000, desc: lang === 'ar' ? 'فيلا فخمة بحدائق واسعة' : 'Palatial villa with gardens', type: 'house', category: lang === 'ar' ? 'هيبة عالية' : 'High Prestige' },
+                        { id: 'merchant-loft', name: lang === 'ar' ? 'نزل التاجر' : 'Merchant Loft', price: 25000, desc: lang === 'ar' ? 'مساحة مريحة قرب الأسواق' : 'Comfortable space near markets', type: 'house', category: lang === 'ar' ? 'تكلفة متوسطة' : 'Moderate Cost' },
+                        { id: 'nomad-tent', name: lang === 'ar' ? 'منزل بسيط' : 'Simple House', price: 5000, desc: lang === 'ar' ? 'سكن متواضع للمبتدئين' : 'Starter home for new traders', type: 'house', category: lang === 'ar' ? 'تكلفة منخفضة' : 'Low Cost' },
+                        { id: 'royal-castle', name: lang === 'ar' ? 'قصر ملكي' : 'Royal Castle', price: 1000000, desc: lang === 'ar' ? 'أقصى درجات الفخامة والمكانة' : 'Maximum prestige and rent', type: 'house', category: lang === 'ar' ? 'نادر جداً' : 'Ultra Rare' }
                       ].map((item, idx) => {
                         const ownedInstance = properties.find(p => p.itemId === item.id);
                         return <BazaarItemCard key={idx} item={item} ownedInstance={ownedInstance} />;
@@ -1241,9 +1513,9 @@ export default function App() {
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 pb-12">
                       {[
-                        { id: 'red-sea-dhow', name: lang === 'ar' ? 'سفينة البحر الأحمر' : 'Red Sea Dhow', price: 8000, desc: lang === 'ar' ? 'سفينة تجارية سريعة' : 'Swift maritime trading ship', type: 'ship', category: 'Elite' },
-                        { id: 'desert-caravan', name: lang === 'ar' ? 'قافلة الصحراء' : 'Desert Caravan', price: 12000, desc: lang === 'ar' ? 'ناقلة بضائع ضخمة' : 'Massive goods transporter', type: 'caravan', category: 'Industrial' },
-                        { id: 'swift-camel', name: lang === 'ar' ? 'ناقة سريعة' : 'Swift Camel', price: 1200, desc: lang === 'ar' ? 'حيوان توصيل سريع' : 'Quick delivery animal', type: 'caravan', category: 'Basic' }
+                        { id: 'red-sea-dhow', name: lang === 'ar' ? 'سفينة البحر الأحمر' : 'Red Sea Dhow', price: 8000, desc: lang === 'ar' ? 'سفينة تجارية سريعة' : 'Swift maritime trading ship', type: 'ship', category: lang === 'ar' ? 'نخبة' : 'Elite' },
+                        { id: 'desert-caravan', name: lang === 'ar' ? 'قافلة الصحراء' : 'Desert Caravan', price: 12000, desc: lang === 'ar' ? 'ناقلة بضائع ضخمة' : 'Massive goods transporter', type: 'caravan', category: lang === 'ar' ? 'صناعي' : 'Industrial' },
+                        { id: 'swift-camel', name: lang === 'ar' ? 'ناقة سريعة' : 'Swift Camel', price: 1200, desc: lang === 'ar' ? 'حيوان توصيل سريع' : 'Quick delivery animal', type: 'caravan', category: lang === 'ar' ? 'أساسي' : 'Basic' }
                       ].map((item, idx) => {
                         const ownedInstance = properties.find(p => p.itemId === item.id);
                         return <BazaarItemCard key={idx} item={item} ownedInstance={ownedInstance} />;

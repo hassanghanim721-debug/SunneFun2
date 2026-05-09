@@ -80,6 +80,10 @@
     "/tradeLogs/{logId}": {
       "schema": "TradeLog",
       "description": "Trade history logs for users and admins."
+    },
+    "/globalState/{docId}": {
+      "schema": "object",
+      "description": "Global game state variables (e.g. property availability)."
     }
   }
 }
