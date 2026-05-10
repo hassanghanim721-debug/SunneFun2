@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShoppingBag, Wallet, Map as MapIcon, LogOut, Languages, TrendingUp, Crown, Gem, Store } from 'lucide-react';
+import { ShoppingBag, Wallet, Map as MapIcon, LogOut, Languages, TrendingUp, Crown, Gem, Store, ScrollText } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
 import { TRANSLATIONS } from '@/src/constants';
 
@@ -58,7 +58,9 @@ export const Sidebar: React.FC<SidebarProps & { isOpen?: boolean; onClose?: () =
   const menuItems = [
     { id: 'map', icon: MapIcon, label: t.tradeMap },
     { id: 'convoys', icon: TrendingUp, label: t.myConvoys },
+    { id: 'quests', icon: ScrollText, label: t.quests },
     { id: 'market', icon: ShoppingBag, label: t.marketplace },
+    { id: 'clans', icon: Crown, label: t.clans },
     { id: 'wallet', icon: Wallet, label: t.wealth },
   ];
 

@@ -1,35 +1,87 @@
 import React from 'react';
-import { motion } from 'motion/react';
-import { CITIES, ROUTES } from '@/src/constants';
+import { motion, AnimatePresence } from 'motion/react';
+import { cn } from '@/src/lib/utils';
+import { CITIES, ROUTES, TRANSLATIONS } from '@/src/constants';
 
 interface TradeMapProps {
   lang: 'en' | 'ar';
+  onPinClick: (routeId: string) => void;
+  activeStormRoute?: string | null;
 }
 
-export const TradeMap: React.FC<TradeMapProps> = ({ lang }) => {
+export const TradeMap: React.FC<TradeMapProps> = ({ lang, onPinClick, activeStormRoute }) => {
+  const t = TRANSLATIONS[lang];
+
+  const PINS = [
+    { id: 'silk-road', x: 850, y: 250, label: lang === 'ar' ? 'طريق الحرير' : 'Silk Road' },
+    { id: 'amber-road', x: 300, y: 350, label: lang === 'ar' ? 'طريق العنبر' : 'Amber Road' },
+    { id: 'gulf-harbor-sea', x: 600, y: 850, label: lang === 'ar' ? 'الخليج' : 'Gulf Harbor' }
+  ];
+
   return (
-    <div className="w-full h-full bg-[#f4f1ea] relative overflow-hidden rounded-xl border-8 border-[#d4c5a9] shadow-2xl p-4">
+    <div className="w-full h-full bg-[#f4f1ea] relative overflow-hidden group/map select-none">
       {/* Parchment Overlay Pattern */}
-      <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'url("https://www.transparenttextures.com/patterns/handmade-paper.png")' }} />
+      <div className="absolute inset-0 opacity-10 pointer-events-none z-10" style={{ backgroundImage: 'url("https://www.transparenttextures.com/patterns/handmade-paper.png")' }} />
       
+      {/* Sandstorm Effect Overlay - Localized */}
+      <AnimatePresence>
+        {activeStormRoute && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className={cn(
+              "absolute z-50 pointer-events-none overflow-hidden rounded-full blur-xl border-4 border-amber-600/30",
+              activeStormRoute === 'silk-road' 
+                ? "top-[32%] right-[5%] w-24 h-24 md:w-40 md:h-40" 
+                : "top-[32%] right-[15%] w-24 h-24 md:w-40 md:h-40"
+            )}
+            style={{
+              background: 'radial-gradient(circle at center, rgba(146, 64, 14, 0.4) 0%, rgba(146, 64, 14, 0.1) 70%, transparent 100%)'
+            }}
+          >
+            {[...Array(20)].map((_, i) => (
+              <motion.div
+                key={i}
+                initial={{ x: -25, y: Math.random() * 200, opacity: 0 }}
+                animate={{ 
+                  x: 300, 
+                  y: (Math.random() * 200) + (Math.random() * 30 - 15),
+                  opacity: [0, 0.8, 0] 
+                }}
+                transition={{ 
+                  duration: 1 + Math.random() * 1.5, 
+                  repeat: Infinity, 
+                  delay: Math.random() * 1,
+                  ease: "linear"
+                }}
+                className="absolute w-16 md:w-32 h-0.5 bg-gradient-to-r from-transparent via-amber-600/60 to-transparent blur-[1px]"
+              />
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {activeStormRoute && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[60] px-4 py-2 bg-amber-600/90 text-white font-black text-[10px] md:text-sm rounded-full shadow-2xl animate-pulse flex items-center gap-2 pointer-events-none">
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-white"></span>
+          </span>
+          {lang === 'ar' ? `عاصفة رملية على ${activeStormRoute}` : `Sandstorm on ${activeStormRoute}`}
+        </div>
+      )}
+
       <div className="relative w-full h-full flex items-center justify-center">
         <svg
           viewBox="0 0 1000 1000"
-          className="w-full h-full drop-shadow-xl"
+          className="w-full h-full transition-transform duration-700"
           preserveAspectRatio="xMidYMid meet"
         >
           <defs>
-            <filter id="parchment-tex" x="0" y="0" width="100%" height="100%">
-              <feTurbulence type="fractalNoise" baseFrequency="0.03" numOctaves="8" result="noise" />
-              <feDiffuseLighting in="noise" lightingColor="#f4f1ea" surfaceScale="2">
-                <feDistantLight azimuth="45" elevation="60" />
-              </feDiffuseLighting>
+            <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+              <feDropShadow dx="0" dy="4" stdDeviation="4" floodOpacity="0.4" />
             </filter>
-            
-            {/* Path Text Paths */}
-            <path id="silkRoadPath" d="M 900 300 Q 750 350 500 500" />
-            <path id="amberRoadPath" d="M 200 100 Q 300 350 500 500" />
-            <path id="gulfRoutePath" d="M 600 850 Q 550 700 500 500" />
           </defs>
 
           {/* Ocean with Texture */}
@@ -37,85 +89,171 @@ export const TradeMap: React.FC<TradeMapProps> = ({ lang }) => {
           <path d="M50,50 L950,50 L950,400 Q800,450 700,400 Q550,350 450,450 Q300,550 400,650 Q450,750 600,750 Q800,750 850,850 L850,950 L50,950 Z" 
                 fill="#f4f1ea" stroke="#8b7355" strokeWidth="2" />
 
-          {/* Mountains & Trees Illustrations (Hand-drawn look) */}
-          <g opacity="0.6" stroke="#8b7355" strokeWidth="1" fill="none">
-             {/* Mountains */}
+          {/* Mountains & Trees */}
+          <g opacity="0.4" stroke="#8b7355" strokeWidth="1" fill="none">
              <path d="M100,200 L120,160 L140,200 M115,180 L130,165" />
              <path d="M130,220 L150,180 L170,220 M145,200 L160,185" />
              <path d="M160,210 L180,170 L200,210" />
-             
-             {/* Small Tree Clusters */}
              <path d="M100,650 Q105,630 110,650 M105,650 L105,660" />
-             <path d="M120,670 Q125,650 130,670 M125,670 L125,680" />
-             
-             {/* Barrels near port */}
              <circle cx="280" cy="710" r="8" fill="#d4c5a9" />
-             <circle cx="295" cy="725" r="8" fill="#d4c5a9" />
           </g>
 
-          {/* The Paths (Thick and colored as in image) */}
-          <motion.path d="M 250 400 L 400 350 L 500 500" stroke="#b91c1c" strokeWidth="8" fill="none" className="opacity-80" />
-          <motion.path d="M 400 350 L 850 320" stroke="#b91c1c" strokeWidth="8" fill="none" className="opacity-80" />
-          
-          <motion.path d="M 350 450 L 500 400 L 800 500" stroke="#d97706" strokeWidth="8" fill="none" className="opacity-80" />
-          
-          <motion.path d="M 520 600 L 550 800" stroke="#1e40af" strokeWidth="8" fill="none" className="opacity-80" />
-          <motion.path d="M 550 500 L 800 800" stroke="#1e40af" strokeWidth="8" fill="none" className="opacity-80" />
-
-          {/* Path Labels (Curved text) */}
-          <text className="text-[12px] font-bold fill-red-800 uppercase tracking-tighter" opacity="0.6">
-            <textPath href="#silkRoadPath" startOffset="30%">GREAT SILK ROUTE - SILK ROAD</textPath>
-          </text>
-          <text className="text-[12px] font-bold fill-amber-800 uppercase tracking-tighter" opacity="0.6">
-            <textPath href="#amberRoadPath" startOffset="20%">AMBER TRAIL - AMBER ROAD</textPath>
-          </text>
-          <text className="text-[12px] font-bold fill-blue-800 uppercase tracking-tighter" opacity="0.6" rotate="90">
-             <textPath href="#gulfRoutePath" startOffset="40%">GULF WATERS - GULF HARBOR</textPath>
-          </text>
-
-          {/* Moving Objects (Camels & Ships) */}
-          {/* Camels on Silk Road */}
+          {/* North Star */}
           <motion.g
-            animate={{ offsetDistance: ["0%", "100%"] }}
-            transition={{ duration: 40, repeat: Infinity, ease: "linear" }}
-            style={{ 
-              offsetPath: "path('M 800 320 L 400 350')",
-              offsetRotate: "0deg"
-            }}
+            initial={{ opacity: 0, scale: 0 }}
+            animate={{ opacity: [0.4, 0.8, 0.4], scale: [0.8, 1, 0.8] }}
+            transition={{ duration: 4, repeat: Infinity }}
+            className="pointer-events-none"
           >
-            <text className="text-xl">🐫</text>
+            <path 
+              d="M 500 60 L 505 75 L 520 80 L 505 85 L 500 100 L 495 85 L 480 80 L 495 75 Z" 
+              fill="#D4AF37" 
+              opacity="0.8"
+            />
           </motion.g>
 
-          {/* Ships in Gulf */}
+          {/* Trade Routes (Lines) */}
+          {/* Silk Road: Mashreq to Pin to Amber Junction */}
+          <motion.path d="M 850 250 L 575 300 L 300 350" stroke="#D4AF37" strokeWidth="14" fill="none" opacity="0.4" />
+          
+          {/* Amber Road: Amber Station curved to Zanzibar - staying on land side */}
+          <motion.path d="M 300 350 Q 150 650 600 850" stroke="#B45309" strokeWidth="12" fill="none" opacity="0.4" />
+          
+          {/* Gulf Harbor Main: Zanzibar to Al Khaleej */}
+          <motion.path d="M 600 850 Q 550 650 500 500" stroke="#1E40AF" strokeWidth="10" fill="none" opacity="0.4" />
+          
+          {/* Local Harbor: Al Khaleej to Al Khaleej Borders */}
+          <motion.path d="M 480 480 Q 500 530 520 480" stroke="#1E40AF" strokeWidth="6" fill="none" opacity="0.3" />
+
+          {/* Animated Ship */}
           <motion.g
-            animate={{ offsetDistance: ["0%", "100%"] }}
-            transition={{ duration: 25, repeat: Infinity, ease: "linear" }}
-            style={{ 
-              offsetPath: "path('M 800 800 L 550 500')",
-              offsetRotate: "0deg"
+            animate={{ 
+              x: [600, 520, 600], 
+              y: [850, 600, 850],
+              rotate: [0, -30, 0]
             }}
+            transition={{ duration: 45, repeat: Infinity, ease: "easeInOut" }}
           >
-            <text className="text-xl">⛵</text>
+            <text fontSize="30" dy="15" dx="-15">⛵</text>
           </motion.g>
 
-          {/* Main Landmark Buildings */}
-          <g className="fill-[#e5e0d4] stroke-[#8b7355]" strokeWidth="1">
-             <rect x="470" y="460" width="60" height="40" rx="2" />
-             <path d="M470,460 Q500,430 530,460" />
-             
-             <rect x="850" y="300" width="40" height="30" rx="2" />
-             <path d="M850,300 Q870,280 890,300" />
-          </g>
+          {/* Animated Camel */}
+          <motion.g
+            animate={{ 
+              x: [850, 300, 850], 
+              y: [250, 350, 250],
+              scaleX: [-1, 1, -1]
+            }}
+            transition={{ duration: 55, repeat: Infinity, ease: "linear" }}
+          >
+            <text fontSize="25" dy="12" dx="-12">🐪</text>
+          </motion.g>
 
-          {/* Cities / Points of Interest */}
-          {CITIES.map((city) => (
-            <g key={city.id} className="cursor-pointer group">
-              <circle cx={city.x} cy={city.y} r="5" fill="#8b7355" className="group-hover:fill-gold-600 transition-colors" />
-              <text x={city.x} y={city.y + 20} textAnchor="middle" className="fill-[#5d4037] font-serif italic text-[14px] font-bold pointer-events-none drop-shadow-sm">
-                {lang === 'ar' ? city.nameAr : city.name}
-              </text>
+          {/* Interactive Pins */}
+          {PINS.map((pin) => (
+            <g 
+              key={pin.id} 
+              className="cursor-pointer" 
+              onClick={() => onPinClick(pin.id)}
+            >
+              <motion.g
+                initial={{ scale: 1 }}
+                whileHover={{ scale: 1.2 }}
+                transition={{ type: "spring", stiffness: 300 }}
+              >
+                {/* Pin Drop Shadow */}
+                <circle cx={pin.x} cy={pin.y + 4} r="15" fill="black" opacity="0.2" />
+                
+                {/* Outer Ring */}
+                <circle cx={pin.x} cy={pin.y} r="12" fill="white" stroke="#8b7355" strokeWidth="2" />
+                
+                {/* Inner Color */}
+                <circle 
+                  cx={pin.x} 
+                  cy={pin.y} 
+                  r="8" 
+                  fill={pin.id === 'silk-road' ? '#b91c1c' : pin.id === 'amber-road' ? '#d97706' : '#1e40af'} 
+                />
+                
+                {/* Pulse Animation */}
+                <motion.circle
+                  cx={pin.x}
+                  cy={pin.y}
+                  r="18"
+                  stroke={pin.id === 'silk-road' ? '#b91c1c' : pin.id === 'amber-road' ? '#d97706' : '#1e40af'}
+                  strokeWidth="2"
+                  fill="none"
+                  animate={{ r: [15, 30], opacity: [0.6, 0] }}
+                  transition={{ duration: 2, repeat: Infinity }}
+                />
+              </motion.g>
+
+              {/* Label - visible on mobile / default */}
+              <g transform={`translate(${pin.x}, ${pin.y + 45})`}>
+                <rect
+                  x="-120"
+                  y="-20"
+                  width="240"
+                  height="40"
+                  rx="20"
+                  fill="rgba(20, 15, 10, 0.95)"
+                  stroke="#8b7355"
+                  strokeWidth="2"
+                  className="shadow-2xl transition-transform duration-300 group-hover:scale-105"
+                />
+                <text 
+                  textAnchor="middle" 
+                  dy="8"
+                  className="fill-gold-100 font-serif italic text-[24px] font-black pointer-events-none drop-shadow-[0_2px_4px_rgba(0,0,0,1)] uppercase tracking-wider"
+                >
+                  {pin.label}
+                </text>
+              </g>
             </g>
           ))}
+
+          {/* Cities (Small markers and Labels) */}
+          {CITIES.map((city) => {
+            let labelX = city.x;
+            let labelY = city.y + 18;
+            let textAnchor = "middle";
+
+            if (city.id === 'mashreq') labelY = city.y - 25;
+            if (city.id === 'tayma') labelY = city.y - 25;
+            if (city.id === 'harbor-bay') {
+              labelX = city.x + 75;
+              labelY = city.y + 5;
+              textAnchor = "start";
+            }
+            if (city.id === 'al-qamar') {
+              labelX = city.x - 25;
+              labelY = city.y + 5;
+              textAnchor = "end";
+            }
+            if (city.id === 'zanzibar-sub') {
+              labelY = city.y + 35;
+            }
+            if (city.id === 'bandit-den') {
+              labelY = city.y - 12;
+            }
+            if (city.id === 'high-outpost') {
+              labelY = city.y - 12;
+            }
+
+            return (
+              <g key={city.id}>
+                <circle cx={city.x} cy={city.y} r="4" fill="#8b7355" opacity="0.7" />
+                <text 
+                  x={labelX} 
+                  y={labelY} 
+                  textAnchor={textAnchor} 
+                  className="fill-[#5d4037] opacity-80 font-serif italic text-[18px] font-black pointer-events-none drop-shadow-sm"
+                >
+                  {lang === 'ar' ? city.nameAr : city.name}
+                </text>
+              </g>
+            );
+          })}
         </svg>
       </div>
     </div>

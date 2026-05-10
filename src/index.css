@@ -1,5 +1,5 @@
-@import "tailwindcss";
 @import url('https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@400;700;900&family=Inter:wght@300;400;500;600&family=Playfair+Display:ital,wght@0,400;0,700;1,400&display=swap');
+@import "tailwindcss";
 
 @theme {
   --font-display: "Cinzel Decorative", serif;
@@ -43,4 +43,13 @@
 .ornament-pattern {
   background-image: radial-gradient(circle at 2px 2px, #d4af37 1px, transparent 0);
   background-size: 24px 24px;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }

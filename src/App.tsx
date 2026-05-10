@@ -8,7 +8,7 @@ import { Sidebar } from './components/Sidebar';
 import { TradeMap } from './components/TradeMap';
 import { Auth } from './components/Auth';
 import { motion, AnimatePresence } from 'motion/react';
-import { ShoppingBag, Wallet, Coins, Landmark, Ship, Home, TrendingUp, AlertCircle, CheckCircle2, Menu, X, Moon, Sun, Crown, Gem, Store, User, Bell } from 'lucide-react';
+import { ShoppingBag, Wallet, Coins, Landmark, Ship, Home, TrendingUp, AlertCircle, CheckCircle2, Menu, X, Moon, Sun, Crown, Gem, Store, User, Bell, Skull, ScrollText } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
 import { auth, db, handleFirestoreError, OperationType } from '@/src/lib/firebase';
 import { onAuthStateChanged, signOut, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
@@ -52,10 +52,55 @@ export default function App() {
   const [dismissedNotifications, setDismissedNotifications] = useState<Set<string>>(new Set());
   const [tradeLogs, setTradeLogs] = useState<any[]>([]);
   const [isNotificationMenuOpen, setIsNotificationMenuOpen] = useState(false);
+  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
+  const [localQuests, setLocalQuests] = useState<any[]>([]);
+  const [showRaidNotification, setShowRaidNotification] = useState<{loss: number, survivors: number} | null>(null);
+  const [hasProcessedOfflineRaids, setHasProcessedOfflineRaids] = useState(false);
+  const [clans, setClans] = useState<any[]>([]);
+  const [myClan, setMyClan] = useState<any>(null);
+  const [isCreatingClan, setIsCreatingClan] = useState(false);
+  const [clanNameInput, setClanNameInput] = useState('');
+  const [activeStormRoute, setActiveStormRoute] = useState<string | null>(null);
+
+  // Storm Logic: 15m duration, 45m interval.
+  useEffect(() => {
+    const checkStorm = () => {
+      const now = new Date();
+      const mins = now.getMinutes();
+      const isStormActive = mins < 15;
+      const stormRouteId = (now.getHours() % 2 === 0) ? 'silk-road' : 'amber-road';
+      setActiveStormRoute(isStormActive ? stormRouteId : null);
+    };
+
+    checkStorm();
+    const interval = setInterval(checkStorm, 10000);
+    return () => clearInterval(interval);
+  }, []);
 
   const isConvoyLeader = (profile?.balance || 0) >= 250000;
+  const isClanMember = !!profile?.clanId;
 
   const hasAutoCollect = (profile?.rentCollectionsCount || 0) >= 10;
+
+  // Continuous increment/decrement logic
+  const [intervalId, setIntervalId] = useState<NodeJS.Timeout | null>(null);
+
+  const startCounter = (callback: () => void) => {
+    callback(); // Initial call
+    const id = setInterval(callback, 100); // 10fps for smooth counting
+    setIntervalId(id);
+  };
+
+  const stopCounter = () => {
+    if (intervalId) {
+      clearInterval(intervalId);
+      setIntervalId(null);
+    }
+  };
+
+  useEffect(() => {
+    return () => stopCounter();
+  }, [intervalId]);
 
   useEffect(() => {
     const isDark = localStorage.getItem('darkMode') === 'true';
@@ -68,6 +113,85 @@ export default function App() {
 
   const t = TRANSLATIONS[lang];
   
+  useEffect(() => {
+    if (!user) return;
+    
+    // Fetch Clans for Leaderboard
+    const clansRef = collection(db, 'clans');
+    const qClans = query(clansRef); // We'll sort via client-side for simple logic or add order in rules
+    
+    const unsubscribeClans = onSnapshot(qClans, (snapshot) => {
+      const clanList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      // Sort by member count or wealth (we'll use wealth if we had it, but let's use memberCount for now)
+      setClans(clanList.sort((a: any, b: any) => (b.memberWealth || 0) - (a.memberWealth || 0)));
+      
+      if (profile?.clanId) {
+        const myClanData = clanList.find(c => c.id === profile.clanId);
+        setMyClan(myClanData);
+      }
+    });
+
+    return () => unsubscribeClans();
+  }, [user, profile?.clanId]);
+
+  const handleJoinClan = async (clanId: string) => {
+    if (!user || !profile) return;
+    setIsProcessing(true);
+    try {
+      const clanRef = doc(db, 'clans', clanId);
+      const userRef = doc(db, 'users', user.uid);
+      
+      const batch = writeBatch(db);
+      batch.update(userRef, { clanId, updatedAt: serverTimestamp() });
+      batch.update(clanRef, { 
+        members: increment(1),
+        memberWealth: increment(profile.balance || 0)
+      });
+      
+      await batch.commit();
+      setNotification({ type: 'success', message: lang === 'ar' ? 'تم الانضمام للنقابة بنجاح!' : 'Successfully joined the clan!' });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `clans/${clanId}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleCreateClan = async (clanName: string) => {
+    if (!user || profile?.balance < 50000) {
+      setNotification({ type: 'error', message: lang === 'ar' ? 'تحتاج إلى 50,000 دينار لإنشاء نقابة' : 'You need 50,000 Dinars to form a clan' });
+      return;
+    }
+    setIsProcessing(true);
+    try {
+      const clanRef = doc(collection(db, 'clans'));
+      const userRef = doc(db, 'users', user.uid);
+      
+      const batch = writeBatch(db);
+      batch.set(clanRef, {
+        name: clanName,
+        leaderId: user.uid,
+        leaderName: profile.name,
+        members: 1,
+        memberWealth: profile.balance,
+        createdAt: serverTimestamp()
+      });
+      batch.update(userRef, { 
+        clanId: clanRef.id, 
+        balance: increment(-50000),
+        updatedAt: serverTimestamp() 
+      });
+      
+      await batch.commit();
+      setNotification({ type: 'success', message: lang === 'ar' ? 'تم تأسيس النقابة بنجاح!' : 'Clan established successfully!' });
+      setActiveTab('clans');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'clans');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const getUserRank = (balance: number = 0) => {
     if (balance >= 500000) {
       return {
@@ -146,6 +270,67 @@ export default function App() {
             const data = snapshot.data();
             setProfile(data);
             localStorage.setItem('qafila_cached_profile', JSON.stringify(data));
+
+            // BANDIT MECHANIC: Lazy Calculation
+            if (data.lastActiveAt) {
+              if (!hasProcessedOfflineRaids) {
+                setHasProcessedOfflineRaids(true);
+                const lastActive = new Date(data.lastActiveAt).getTime();
+                const now = Date.now();
+                const hoursOffline = (now - lastActive) / (1000 * 60 * 60);
+
+                if (hoursOffline >= 6 && !data.clanId) {
+                  // Raid chance: 30% if offline > 6h
+                  if (Math.random() < 0.3) {
+                    const lossPercent = 0.02 + Math.random() * 0.03; // 2-5%
+                    const raidLoss = Math.floor(data.balance * lossPercent);
+                    
+                    if (raidLoss > 0) {
+                      const newBalance = data.balance - raidLoss;
+                      updateDoc(userDocRef, {
+                        balance: newBalance,
+                        updatedAt: serverTimestamp(),
+                        lastActiveAt: new Date().toISOString()
+                      });
+                      
+                      // Log the raid
+                      const logRef = doc(collection(db, 'tradeLogs'));
+                      setDoc(logRef, {
+                        userId: authenticatedUser.uid,
+                        userName: data.name,
+                        routeName: lang === 'ar' ? 'غارة اللصوص' : 'Bandit Raid',
+                        amount: raidLoss,
+                        type: 'raid',
+                        timestamp: new Date().toISOString()
+                      });
+                      
+                      setShowRaidNotification({ loss: raidLoss, survivors: 0 });
+                    }
+                  } else {
+                    updateDoc(userDocRef, { lastActiveAt: new Date().toISOString() });
+                  }
+                } else if (hoursOffline >= 0.5) {
+                   updateDoc(userDocRef, { lastActiveAt: new Date().toISOString() });
+                }
+              }
+            } else {
+              // No lastActiveAt yet, set it
+              updateDoc(userDocRef, { lastActiveAt: new Date().toISOString() });
+              setHasProcessedOfflineRaids(true);
+            }
+
+            // Sync Quests session
+            if (!data.quests || isNewDay(data.quests.lastQuestReset)) {
+              const freshQuests = [
+                { id: 'q1', type: 'trade', target: 3, current: 0, completed: false, claimable: false, title: lang === 'ar' ? 'تاجر نشط' : 'Active Trader', desc: lang === 'ar' ? 'أكمل 3 رحلات تجارية' : 'Complete 3 trade convoys', reward: 5000 },
+                { id: 'q2', type: 'wealth', target: 150000, current: data.balance, completed: data.balance >= 150000, claimable: data.balance >= 150000, title: lang === 'ar' ? 'جامع الذهب' : 'Gold Hoarder', desc: lang === 'ar' ? 'صل إلى 150,000 دينار' : 'Reach 150,000 Dinars', reward: 10000 },
+                { id: 'q3', type: 'property', target: 1, current: properties.length, completed: properties.length >= 1, claimable: properties.length >= 1, title: lang === 'ar' ? 'صاحب عقار' : 'Landlord', desc: lang === 'ar' ? 'امتلك عقاراً واحداً' : 'Own 1 property', reward: 7500 }
+              ];
+              setLocalQuests(freshQuests);
+            } else {
+              setLocalQuests(data.quests.dailyQuests || []);
+            }
+
             setLoading(false);
           }
         }, (err) => {
@@ -281,6 +466,10 @@ export default function App() {
 
           await batch.commit();
           
+          if (completions.length > 0) {
+            updateQuestProgress('trade', completions.length);
+          }
+          
           {/* Removed auto-hide to keep them in notification center */}
           setPersistentNotifications(prev => [...prev, ...completions]);
           
@@ -319,6 +508,55 @@ export default function App() {
     return () => clearInterval(timer);
   }, [activeInvestments, properties, user, profile, isProcessing, persistentNotifications, lang]);
 
+  const updateQuestProgress = (type: string, incrementValue: number = 1) => {
+    setLocalQuests(prev => {
+      const updated = prev.map(q => {
+        if (q.type === type && !q.completed) {
+          const newCurrent = type === 'wealth' ? (profile?.balance || 0) : q.current + incrementValue;
+          const completed = newCurrent >= q.target;
+          return { ...q, current: newCurrent, completed, claimable: completed };
+        }
+        return q;
+      });
+      return updated;
+    });
+  };
+
+  useEffect(() => {
+    if (profile) {
+      updateQuestProgress('wealth', profile.balance);
+      updateQuestProgress('property', properties.length);
+    }
+  }, [profile?.balance, properties.length]);
+
+  const claimQuestReward = async (questId: string) => {
+    const quest = localQuests.find(q => q.id === questId);
+    if (!quest || !quest.claimable || !user) return;
+
+    setIsProcessing(true);
+    try {
+      const batch = writeBatch(db);
+      const userRef = doc(db, 'users', user.uid);
+      
+      const updatedQuests = localQuests.map(q => q.id === questId ? { ...q, claimable: false, completed: true, status: 'claimed' } : q);
+      
+      batch.update(userRef, {
+        balance: increment(quest.reward),
+        'quests.dailyQuests': updatedQuests,
+        'quests.lastQuestReset': new Date().toISOString(),
+        updatedAt: serverTimestamp()
+      });
+
+      await batch.commit();
+      setLocalQuests(updatedQuests);
+      setNotification({ type: 'success', message: lang === 'ar' ? `تم استلام مكافأة ${quest.reward} د!` : `Claimed ${quest.reward} D reward!` });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const ensureAuthenticated = async () => {
     if (auth.currentUser) return true;
     
@@ -354,11 +592,32 @@ export default function App() {
     if (!isVerified) return;
 
     const totalCost = amount * tradeQuantity;
+
+    // Sandstorm Modifiers
+    let finalProfit = profit;
+    let finalDuration = durationMinutes;
+    let isHitByStorm = false;
+
+    if (activeStormRoute) {
+      if (activeStormRoute === routeId) {
+        // Hit by storm: "Stop and wait" + risk
+        isHitByStorm = true;
+        finalDuration += 10; // 10m stop and wait
+        const riskChance = Math.random() < 0.05; // 5% chance
+        if (riskChance) {
+          finalProfit = Math.max(0, profit - 15); // lose 15% profit
+        }
+      } else if (routeId !== 'gulf-harbor-sea') {
+        // "Other" route (not sea): Bonus profit + delay
+        finalProfit += 50;
+        finalDuration += 5;
+      }
+    }
     
     if (profile.balance >= totalCost) {
       setIsProcessing(true);
       try {
-        const maturationTime = durationMinutes * 60 * 1000;
+        const maturationTime = finalDuration * 60 * 1000;
         const expiresAt = Date.now() + maturationTime;
         const startTime = Date.now();
 
@@ -371,8 +630,8 @@ export default function App() {
             userId: user.uid,
             name: `${name} ${tradeQuantity > 1 ? `(#${i+1})` : ''}`,
             amount,
-            profit,
-            status: 'En route',
+            profit: finalProfit,
+            status: isHitByStorm ? 'Waiting (Storm)' : 'En route',
             routeId,
             startTime,
             expiresAt,
@@ -688,7 +947,14 @@ export default function App() {
       'amber-road': 'amberRoad',
       'gulf-harbor-sea': 'gulfHarbor'
     };
-    return t[map[routeId] || 'silkRoad'] as string;
+    return (t[map[routeId] || 'silkRoad'] as string) || routeId;
+  };
+
+  const isNewDay = (lastDateStr: string) => {
+    if (!lastDateStr) return true;
+    const lastDate = new Date(lastDateStr);
+    const now = new Date();
+    return lastDate.getDate() !== now.getDate() || lastDate.getMonth() !== now.getMonth() || lastDate.getFullYear() !== now.getFullYear();
   };
 
   const getTimestampMills = (ts: any) => {
@@ -738,24 +1004,24 @@ export default function App() {
 
     return (
       <div className={cn(
-        "glass-panel p-6 rounded-3xl border transition-all group shadow-sm flex flex-col h-full",
+        "glass-panel p-4 sm:p-6 rounded-[24px] sm:rounded-3xl border transition-all group shadow-sm flex flex-col h-full",
         darkMode ? "bg-black/40 border-gold-900/30 text-gold-50" : "bg-white/90 border-gold-200 text-gray-900",
         isOwned ? (darkMode ? "border-green-900/50" : "border-green-100 ring-1 ring-green-100/50") : ""
       )}>
-        <div className="flex justify-between items-start mb-4">
+        <div className="flex justify-between items-start mb-3 sm:mb-4">
           <div className="flex items-center gap-3">
             <div className={cn(
-              "w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-110",
+              "w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-110",
               darkMode ? "bg-gold-900/20 text-gold-400" : "bg-gold-50 text-gold-700",
               isSoldOut && !isOwned ? "grayscale opacity-50" : "",
               isLocked ? "bg-gray-100 text-gray-400 grayscale" : ""
             )}>
-              {isLocked ? <AlertCircle size={24} /> : (item.type === 'ship' ? <Ship size={24} /> : <Home size={24} />)}
+              {isLocked ? <AlertCircle size={20} className="sm:w-6 sm:h-6" /> : (item.type === 'ship' ? <Ship size={20} className="sm:w-6 sm:h-6" /> : <Home size={20} className="sm:w-6 sm:h-6" />)}
             </div>
             <div>
-              <h4 className="font-serif font-bold text-lg leading-tight">{localizedName}</h4>
+              <h4 className="font-serif font-bold text-base sm:text-lg leading-tight">{localizedName}</h4>
               <p className={cn(
-                "text-[10px] font-black uppercase tracking-widest",
+                "text-[9px] sm:text-[10px] font-black uppercase tracking-widest",
                 isLocked ? "text-red-500" : "text-gold-600"
               )}>
                 {isLocked ? t.requiresLeader : (item.category || 'Legacy')}
@@ -896,169 +1162,176 @@ export default function App() {
       
       <main className="flex-1 relative flex flex-col min-w-0 overflow-hidden">
         <header className={cn(
-          "h-14 md:h-16 flex items-center justify-between px-4 lg:px-8 border-b backdrop-blur-sm z-30 transition-colors",
-          darkMode ? "bg-black/60 border-gold-900/30" : "bg-white/50 border-gold-600/10"
+          "h-14 md:h-20 flex items-center justify-between px-3 md:px-8 border-b backdrop-blur-md z-30 transition-all",
+          darkMode ? "bg-black/60 border-gold-900/30" : "bg-white/70 border-gold-600/10"
         )}>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 md:gap-3">
             <button 
               onClick={() => setIsSidebarOpen(true)}
               className={cn(
-                "lg:hidden p-2 rounded-lg transition-colors",
+                "lg:hidden p-2 rounded-xl transition-colors",
                 darkMode ? "text-gold-400 hover:bg-gold-900/20" : "text-gold-700 hover:bg-gold-50"
               )}
             >
-              <Menu size={24} />
+              <Menu size={20} className="md:w-6 md:h-6" />
             </button>
             <div className="flex items-center gap-2">
-              <Landmark size={20} className="text-gold-600 hidden sm:block" />
+              <Landmark size={18} className="text-gold-600 hidden sm:block" />
               <h2 className={cn(
-                "font-serif font-bold text-lg sm:text-xl italic truncate transition-colors",
+                "font-serif font-black text-base md:text-2xl italic truncate",
                 darkMode ? "text-gold-200" : "text-gray-800"
               )}>
                 {activeTab === 'map' && t.routes}
                 {activeTab === 'market' && t.bazaar}
                 {activeTab === 'wallet' && t.wealth}
                 {activeTab === 'convoys' && t.myConvoys}
+                {activeTab === 'quests' && t.quests}
+                {activeTab === 'clans' && t.clans}
               </h2>
             </div>
           </div>
           
-          <div className="flex items-center gap-1.5 sm:gap-3">
-            <div className="relative">
+          <div className="flex items-center gap-1.5 md:gap-4 max-w-[60%] sm:max-w-none">
+            <div className="flex items-center gap-1 md:gap-2">
+              <div className="relative">
+                <button
+                  onClick={() => setIsNotificationMenuOpen(!isNotificationMenuOpen)}
+                  className={cn(
+                    "p-2 md:p-2.5 rounded-full transition-all duration-300 relative",
+                    darkMode ? "bg-gold-900/30 text-gold-300 hover:bg-gold-900/50" : "bg-gold-100 text-gold-700 hover:bg-gold-200",
+                    isNotificationMenuOpen ? (darkMode ? "bg-gold-900/60" : "bg-gold-300") : ""
+                  )}
+                >
+                  <Bell size={14} className="md:w-5 md:h-5" />
+                  {persistentNotifications.length > 0 && (
+                    <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 bg-red-500 text-white text-[7px] font-black rounded-full flex items-center justify-center border-2 border-parchment animate-pulse ring-2 ring-red-500/20">
+                      {persistentNotifications.length}
+                    </span>
+                  )}
+                </button>
+
+                <AnimatePresence>
+                  {isNotificationMenuOpen && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                      className={cn(
+                        "absolute top-full mt-2 w-[calc(100vw-2.5rem)] xs:w-80 max-h-[400px] overflow-y-auto rounded-3xl shadow-2xl z-50 border p-2",
+                        darkMode ? "bg-[#1a1410]/95 border-gold-900/50 backdrop-blur-xl" : "bg-white/95 border-gold-200 backdrop-blur-xl",
+                        lang === 'ar' ? "left-[-0.5rem] xs:left-0" : "right-[-0.5rem] xs:right-0"
+                      )}
+                    >
+                      <div className="p-4 border-b border-gold-100/10 flex justify-between items-center sticky top-0 bg-inherit z-10">
+                        <h4 className="font-serif font-bold text-lg">{lang === 'ar' ? 'تنبيهات القافلة' : 'Caravan Alerts'}</h4>
+                        {persistentNotifications.length > 0 && (
+                          <button 
+                            onClick={() => {
+                              setPersistentNotifications([]);
+                              const newDismissed = new Set(dismissedNotifications);
+                              persistentNotifications.forEach(n => newDismissed.add(n.id));
+                              setDismissedNotifications(newDismissed);
+                            }}
+                            className="text-[10px] uppercase font-black text-gold-600 hover:text-gold-800 transition-colors"
+                          >
+                            {lang === 'ar' ? 'مسح الكل' : 'Clear All'}
+                          </button>
+                        )}
+                      </div>
+                      <div className="py-2 space-y-1">
+                        {persistentNotifications.length === 0 ? (
+                          <div className="p-8 text-center text-gray-400 italic text-sm">
+                            {lang === 'ar' ? 'لا توجد تنبيهات جديدة' : 'No new notifications'}
+                          </div>
+                        ) : (
+                          persistentNotifications.map(notif => (
+                            <div
+                              key={notif.id}
+                              className={cn(
+                                "flex items-center justify-between gap-3 p-3 rounded-2xl transition-colors group",
+                                darkMode ? "hover:bg-gold-900/20" : "hover:bg-gold-50"
+                              )}
+                            >
+                              <div className="flex items-center gap-3">
+                                <div className={cn(
+                                  "w-10 h-10 rounded-full flex items-center justify-center shrink-0",
+                                  notif.type === 'rent' ? "bg-blue-500/20 text-blue-500" : "bg-green-500/20 text-green-500"
+                                )}>
+                                  {notif.type === 'rent' ? <Landmark size={20} /> : <TrendingUp size={20} />}
+                                </div>
+                                <div className="min-w-0">
+                                  <h5 className={cn(
+                                    "font-bold text-xs leading-tight line-clamp-1",
+                                    darkMode ? "text-gold-100" : "text-gray-900"
+                                  )}>
+                                    {notif.type === 'rent' 
+                                      ? (lang === 'ar' ? `إيجار متاح: ${notif.name}` : `Rent available: ${notif.name}`)
+                                      : (lang === 'ar' ? `وصلت قافلة ${notif.name}!` : `Convoy ${notif.name} arrived!`)}
+                                  </h5>
+                                  <p className={cn(
+                                    "text-[10px] font-bold mt-0.5",
+                                    notif.type === 'rent' ? "text-blue-500" : "text-green-500"
+                                  )}>
+                                    {notif.profit} {t.currency} {notif.type === 'rent' ? (lang === 'ar' ? 'إيجار' : 'rent') : (lang === 'ar' ? 'ربح' : 'profit')}
+                                  </p>
+                                </div>
+                              </div>
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setPersistentNotifications(prev => prev.filter(n => n.id !== notif.id));
+                                  setDismissedNotifications(prev => new Set(prev).add(notif.id));
+                                }}
+                                className="p-1.5 opacity-0 group-hover:opacity-100 transition-all text-gray-400 hover:text-red-500"
+                              >
+                                <X size={14} />
+                              </button>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+
               <button
-                onClick={() => setIsNotificationMenuOpen(!isNotificationMenuOpen)}
+                onClick={toggleDarkMode}
                 className={cn(
-                  "p-1.5 sm:p-2 rounded-full transition-all duration-300 relative",
-                  darkMode ? "bg-gold-900/30 text-gold-300 hover:bg-gold-900/50" : "bg-gold-100 text-gold-700 hover:bg-gold-200",
-                  isNotificationMenuOpen ? (darkMode ? "bg-gold-900/60" : "bg-gold-300") : ""
+                  "p-2 md:p-2.5 rounded-full transition-all duration-300",
+                  darkMode ? "bg-gold-900/30 text-gold-300 hover:bg-gold-900/50" : "bg-gold-100 text-gold-700 hover:bg-gold-200"
                 )}
               >
-                <Bell size={16} className="sm:w-5 sm:h-5" />
-                {persistentNotifications.length > 0 && (
-                  <span className="absolute top-0 right-0 w-3 h-3 sm:w-4 h-4 bg-red-500 text-white text-[7px] sm:text-[8px] font-black rounded-full flex items-center justify-center border-2 border-parchment animate-pulse">
-                    {persistentNotifications.length}
-                  </span>
-                )}
+                {darkMode ? <Sun size={14} className="md:w-5 md:h-5" /> : <Moon size={14} className="md:w-5 md:h-5" />}
               </button>
-
-              <AnimatePresence>
-                {isNotificationMenuOpen && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                    className={cn(
-                      "absolute top-full mt-2 w-[calc(100vw-2.5rem)] xs:w-80 max-h-[400px] overflow-y-auto rounded-3xl shadow-2xl z-50 border p-2",
-                      darkMode ? "bg-[#1a1410]/95 border-gold-900/50 backdrop-blur-xl" : "bg-white/95 border-gold-200 backdrop-blur-xl",
-                      lang === 'ar' ? "left-[-0.5rem] xs:left-0" : "right-[-0.5rem] xs:right-0"
-                    )}
-                  >
-                    <div className="p-4 border-b border-gold-100/10 flex justify-between items-center sticky top-0 bg-inherit z-10">
-                      <h4 className="font-serif font-bold text-lg">{lang === 'ar' ? 'تنبيهات القافلة' : 'Caravan Alerts'}</h4>
-                      {persistentNotifications.length > 0 && (
-                        <button 
-                          onClick={() => {
-                            setPersistentNotifications([]);
-                            const newDismissed = new Set(dismissedNotifications);
-                            persistentNotifications.forEach(n => newDismissed.add(n.id));
-                            setDismissedNotifications(newDismissed);
-                          }}
-                          className="text-[10px] uppercase font-black text-gold-600 hover:text-gold-800 transition-colors"
-                        >
-                          {lang === 'ar' ? 'مسح الكل' : 'Clear All'}
-                        </button>
-                      )}
-                    </div>
-                    <div className="py-2 space-y-1">
-                      {persistentNotifications.length === 0 ? (
-                        <div className="p-8 text-center text-gray-400 italic text-sm">
-                          {lang === 'ar' ? 'لا توجد تنبيهات جديدة' : 'No new notifications'}
-                        </div>
-                      ) : (
-                        persistentNotifications.map(notif => (
-                          <div
-                            key={notif.id}
-                            className={cn(
-                              "flex items-center justify-between gap-3 p-3 rounded-2xl transition-colors group",
-                              darkMode ? "hover:bg-gold-900/20" : "hover:bg-gold-50"
-                            )}
-                          >
-                            <div className="flex items-center gap-3">
-                              <div className={cn(
-                                "w-10 h-10 rounded-full flex items-center justify-center shrink-0",
-                                notif.type === 'rent' ? "bg-blue-500/20 text-blue-500" : "bg-green-500/20 text-green-500"
-                              )}>
-                                {notif.type === 'rent' ? <Landmark size={20} /> : <TrendingUp size={20} />}
-                              </div>
-                              <div className="min-w-0">
-                                <h5 className={cn(
-                                  "font-bold text-xs leading-tight line-clamp-1",
-                                  darkMode ? "text-gold-100" : "text-gray-900"
-                                )}>
-                                  {notif.type === 'rent' 
-                                    ? (lang === 'ar' ? `إيجار متاح: ${notif.name}` : `Rent available: ${notif.name}`)
-                                    : (lang === 'ar' ? `وصلت قافلة ${notif.name}!` : `Convoy ${notif.name} arrived!`)}
-                                </h5>
-                                <p className={cn(
-                                  "text-[10px] font-bold mt-0.5",
-                                  notif.type === 'rent' ? "text-blue-500" : "text-green-500"
-                                )}>
-                                  {notif.profit} {t.currency} {notif.type === 'rent' ? (lang === 'ar' ? 'إيجار' : 'rent') : (lang === 'ar' ? 'ربح' : 'profit')}
-                                </p>
-                              </div>
-                            </div>
-                            <button 
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setPersistentNotifications(prev => prev.filter(n => n.id !== notif.id));
-                                setDismissedNotifications(prev => new Set(prev).add(notif.id));
-                              }}
-                              className="p-1.5 opacity-0 group-hover:opacity-100 transition-all text-gray-400 hover:text-red-500"
-                            >
-                              <X size={14} />
-                            </button>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
             </div>
-            <button
-              onClick={toggleDarkMode}
-              className={cn(
-                "p-2 rounded-full transition-all duration-300",
-                darkMode ? "bg-gold-900/30 text-gold-300 hover:bg-gold-900/50" : "bg-gold-100 text-gold-700 hover:bg-gold-200"
-              )}
-            >
-              {darkMode ? <Sun size={18} /> : <Moon size={18} />}
-            </button>
+
             <div className={cn(
-              "flex items-center gap-1 sm:gap-3 px-2 sm:px-3 py-1.5 rounded-full border shadow-sm transition-all animate-in fade-in zoom-in duration-500",
+              "flex items-center gap-1 md:gap-3 px-2 sm:px-4 py-1.5 md:py-2.5 rounded-2xl md:rounded-[20px] border shadow-sm transition-all overflow-hidden bg-opacity-80 backdrop-blur-md",
               darkMode ? "bg-black/40 border-gold-900/50" : "bg-white border-gold-200"
             )}>
               {userRank && (
                 <div className={cn(
-                  "flex items-center gap-1 sm:gap-2 px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-tighter",
+                  "flex items-center gap-1 px-1.5 md:px-2.5 py-0.5 md:py-1 rounded-full text-[8px] md:text-[11px] font-black uppercase tracking-tighter shrink-0",
                   userRank.bgColor,
                   userRank.color,
                   userRank.glow
                 )}>
-                  <userRank.icon size={10} className="sm:w-3 sm:h-3" />
-                  <span className="hidden sm:inline">{userRank.title}</span>
+                  <userRank.icon size={10} className="md:w-3.5 md:h-3.5" />
+                  <span className="hidden xs:inline">{userRank.title}</span>
                 </div>
               )}
-              <div className="h-3 w-px bg-gold-200/50 hidden xs:block" />
-              <div className="flex items-center gap-1.5">
-                <div className="w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-gold-100/50 flex items-center justify-center shrink-0">
-                  <Coins size={10} className="text-gold-600" />
+              <div className="h-4 w-px bg-gold-200/50 hidden xs:block" />
+              
+              <div className="flex items-center gap-1 md:gap-2 ml-auto shrink-1 min-w-0">
+                <div className="w-5 h-5 md:w-7 md:h-7 rounded-full bg-gold-100/50 flex items-center justify-center shrink-0">
+                  <Coins size={12} className="text-gold-600 md:w-4 md:h-4" />
                 </div>
                 <span className={cn(
-                  "font-bold text-xs sm:text-sm",
+                  "font-black text-[10px] md:text-base whitespace-nowrap truncate",
                   darkMode ? "text-gold-300" : "text-gold-900"
                 )}>
-                  {profile?.balance?.toLocaleString() || 0} <span className="text-gold-600 font-medium hidden md:inline">{t.balance}</span>
+                  {profile?.balance?.toLocaleString() || 0} <span className="text-gold-600 font-bold hidden lg:inline">{t.currency}</span>
                 </span>
               </div>
             </div>
@@ -1085,6 +1358,51 @@ export default function App() {
         </AnimatePresence>
 
         {/* Global Modals */}
+        <AnimatePresence>
+          {showRaidNotification && (
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md"
+            >
+              <div className="bg-[#2d2118] border-2 border-red-900 rounded-[40px] p-8 max-w-sm w-full text-center shadow-2xl relative overflow-hidden">
+                {/* Visual blood-like splatter or sand storm overlay */}
+                <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'radial-gradient(circle at 50% 50%, #7f1d1d, transparent)' }} />
+                
+                <div className="w-20 h-20 bg-red-900/30 rounded-full flex items-center justify-center mx-auto mb-6 border border-red-500/30">
+                  <Skull size={40} className="text-red-500 animate-pulse" />
+                </div>
+                
+                <h3 className="font-display text-2xl text-red-100 mb-2">
+                  {lang === 'ar' ? 'غارة اللصوص!' : 'BANDIT RAID!'}
+                </h3>
+                <p className="text-red-200/70 text-sm mb-6 leading-relaxed">
+                  {lang === 'ar' 
+                    ? `بينما كنت بعيداً عن حراسة قافلتك، هاجم اللصوص خزائنك واستولوا على ${showRaidNotification.loss} دينار.` 
+                    : `While your treasury was unguarded, desert bandits raided your vaults and made off with ${showRaidNotification.loss} Dinars.`}
+                </p>
+                
+                <div className="bg-black/40 rounded-2xl p-4 mb-8 border border-white/5">
+                   <div className="flex justify-between items-center text-[10px] font-black uppercase text-gray-500 tracking-widest mb-1">
+                      <span>{lang === 'ar' ? 'الخسارة' : 'LosS'}</span>
+                      <span className="text-red-500">-{showRaidNotification.loss} {t.currency}</span>
+                   </div>
+                   <div className="h-1 bg-gray-800 rounded-full overflow-hidden">
+                      <motion.div initial={{ width: 0 }} animate={{ width: '100%' }} className="h-full bg-red-600" />
+                   </div>
+                </div>
+
+                <button 
+                  onClick={() => setShowRaidNotification(null)}
+                  className="w-full py-4 bg-red-900 text-white rounded-2xl font-bold hover:bg-black transition-all border border-red-500/30 shadow-lg active:scale-95"
+                >
+                  {lang === 'ar' ? 'سأنتقم منهم' : 'I will have my revenge'}
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
         <AnimatePresence>
           {confirmingSell && (
             <motion.div 
@@ -1196,21 +1514,38 @@ export default function App() {
                      <span className={cn("text-sm font-medium", darkMode ? "text-gold-400" : "text-gray-500")}>
                        {lang === 'ar' ? 'الكمية' : 'Quantity'}
                      </span>
-                     <div className="flex items-center gap-4 bg-gold-100/20 rounded-xl p-1">
+                     <div className="flex items-center gap-2 bg-gold-100/20 rounded-xl p-1">
                        <button 
-                         className="w-8 h-8 flex items-center justify-center bg-white rounded-lg shadow-sm font-bold hover:bg-gold-50 disabled:opacity-50"
-                         onClick={() => setTradeQuantity(q => Math.max(1, q - 1))}
+                         className="w-8 h-8 flex items-center justify-center bg-white rounded-lg shadow-sm font-bold hover:bg-gold-50 disabled:opacity-50 select-none"
+                         onMouseDown={() => startCounter(() => setTradeQuantity(q => Math.max(1, q - 1)))}
+                         onMouseUp={stopCounter}
+                         onMouseLeave={stopCounter}
+                         onTouchStart={() => startCounter(() => setTradeQuantity(q => Math.max(1, q - 1)))}
+                         onTouchEnd={stopCounter}
                          disabled={isProcessing}
                        >
                          -
                        </button>
-                       <span className="font-bold w-4 text-center">{tradeQuantity}</span>
+                       <span className="font-bold min-w-[1.5rem] text-center">{tradeQuantity}</span>
                        <button 
-                         className="w-8 h-8 flex items-center justify-center bg-white rounded-lg shadow-sm font-bold hover:bg-gold-50 disabled:opacity-50"
-                         onClick={() => setTradeQuantity(q => q + 1)}
+                         className="w-8 h-8 flex items-center justify-center bg-white rounded-lg shadow-sm font-bold hover:bg-gold-50 disabled:opacity-50 select-none"
+                         onMouseDown={() => startCounter(() => setTradeQuantity(q => q + 1))}
+                         onMouseUp={stopCounter}
+                         onMouseLeave={stopCounter}
+                         onTouchStart={() => startCounter(() => setTradeQuantity(q => q + 1))}
+                         onTouchEnd={stopCounter}
                          disabled={isProcessing}
                        >
                          +
+                       </button>
+                       <button 
+                         onClick={() => {
+                           const maxAffordable = Math.floor((profile?.balance || 0) / confirmingTrade.cost);
+                           if (maxAffordable > 0) setTradeQuantity(maxAffordable);
+                         }}
+                         className="px-2 py-1.5 bg-gold-800 text-white text-[10px] font-black rounded-lg hover:bg-black transition-colors ml-1"
+                       >
+                         {lang === 'ar' ? 'الكل (All)' : 'All'}
                        </button>
                      </div>
                    </div>
@@ -1261,82 +1596,136 @@ export default function App() {
             {activeTab === 'map' && (
               <motion.div
                 key="map"
-                initial={{ opacity: 0, scale: 1.05 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.95 }}
-                className="w-full h-full p-4 md:p-6 flex flex-col"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="w-[calc(100%-1rem)] h-[calc(100%-1rem)] m-2 rounded-[32px] md:rounded-[60px] overflow-hidden border-8 border-parchment shadow-[0_0_50px_rgba(0,0,0,0.3)] relative"
               >
-                <div className="flex-[1.5] md:flex-[3] min-h-0 mb-4 md:mb-6">
-                  <TradeMap lang={lang} />
-                </div>
-                
-                {/* Investing Panel */}
-                <div className="flex-1 space-y-2 md:space-y-3 h-auto shrink-0 pb-6 overflow-y-auto">
-                  {[
-                    { id: 'silk-road', name: t.silkRoad, routeName: lang === 'ar' ? 'طريق الحرير العظيم' : 'GREAT SILK ROUTE', color: 'text-red-700', arrowColor: '#b91c1c', cost: 1000, profit: 10, duration: 1, minRank: 0 },
-                    { id: 'amber-road', name: t.amberRoad, routeName: lang === 'ar' ? 'مسار الكهرمان' : 'AMBER TRAIL', color: 'text-amber-600', arrowColor: '#d97706', cost: 2500, profit: 15, duration: 3, minRank: 0 },
-                    { id: 'gulf-harbor-sea', name: t.gulfHarbor, routeName: lang === 'ar' ? 'مياه الخليج' : 'GULF WATERS', color: 'text-blue-700', arrowColor: '#1e40af', cost: 5000, profit: 25, duration: 5, minRank: 250000 }
-                  ].map((p, i) => {
+                <TradeMap 
+                  lang={lang} 
+                  activeStormRoute={activeStormRoute}
+                  onPinClick={(id) => {
+                  const routes = [
+                    { id: 'silk-road', name: t.silkRoad, cost: 1000, profit: 10, duration: 1, minRank: 0 },
+                    { id: 'amber-road', name: t.amberRoad, cost: 2500, profit: 15, duration: 3, minRank: 0 },
+                    { id: 'gulf-harbor-sea', name: t.gulfHarbor, cost: 5000, profit: 25, duration: 5, minRank: 250000 }
+                  ];
+                  const p = routes.find(r => r.id === id);
+                  if (p) {
                     const isRouteLocked = p.minRank > 0 && (profile?.balance || 0) < p.minRank;
+                    if (isRouteLocked) {
+                      setNotification({ 
+                        type: 'error', 
+                        message: lang === 'ar' 
+                          ? 'يتطلب هذا المسار رتبة "قائد قافلة" (رصيد 250,000 دينار)' 
+                          : 'This route requires "Convoy Leader" status (250,000 Dinars)' 
+                      });
+                    } else {
+                      setConfirmingTrade(p);
+                    }
+                  }
+                }} />
+
+                {/* Floating Route Cards Overlay - Smaller & Fixed Corner List */}
+                <div className={cn(
+                  "absolute bottom-0 z-40 px-3 py-4 flex flex-col gap-2 max-h-[65%] overflow-y-auto no-scrollbar pointer-events-none",
+                  "left-0 items-start"
+                )}>
+                  {[
+                    { id: 'silk-road', name: t.silkRoad, cost: 1000, profit: 10, duration: 1, minRank: 0, color: 'border-red-500/10 bg-red-50/25' },
+                    { id: 'amber-road', name: t.amberRoad, cost: 2500, profit: 15, duration: 3, minRank: 0, color: 'border-amber-500/10 bg-amber-50/25' },
+                    { id: 'gulf-harbor-sea', name: t.gulfHarbor, cost: 5000, profit: 25, duration: 5, minRank: 250000, color: 'border-blue-500/10 bg-blue-50/25' }
+                  ].map((route) => {
+                    const isStormWarning = activeStormRoute === route.id;
+                    const isStormBonus = activeStormRoute && activeStormRoute !== route.id && route.id !== 'gulf-harbor-sea';
+                    
                     return (
-                      <div key={i} className={cn(
-                        "glass-panel px-4 md:px-6 py-3 md:py-4 rounded-[24px] border-gold-100 flex items-center justify-between group hover:border-gold-300 transition-all cursor-pointer shadow-sm relative overflow-hidden",
-                        isRouteLocked ? "bg-gray-100/50 grayscale" : "bg-white",
-                      )}
-                           onClick={() => {
-                             if (isRouteLocked) {
-                               setNotification({ 
-                                 type: 'error', 
-                                 message: lang === 'ar' 
-                                   ? 'يتطلب هذا المسار رتبة "قائد قافلة" (رصيد 250,000 دينار)' 
-                                   : 'This route requires "Convoy Leader" status (250,000 Dinars)' 
-                               });
-                             } else {
-                               setConfirmingTrade(p);
-                             }
-                           }}>
-                        <div className="flex items-center gap-3 md:gap-4 flex-1">
-                          <div className="min-w-0">
-                            <p className={cn("text-[8px] md:text-[10px] font-black uppercase tracking-widest mb-0.5", p.color)}>
-                              {isRouteLocked ? t.requiresLeader : p.routeName}
-                            </p>
-                            <p className="font-serif font-bold text-lg md:text-xl text-gray-800 tracking-tight truncate">{p.name}</p>
+                      <motion.button
+                        key={route.id}
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        whileHover={{ scale: 1.02, x: 3 }}
+                        whileTap={{ scale: 0.98 }}
+                        onClick={() => {
+                           const isRouteLocked = route.minRank > 0 && (profile?.balance || 0) < route.minRank;
+                           if (isRouteLocked) {
+                              setNotification({ 
+                                type: 'error', 
+                                message: lang === 'ar' 
+                                  ? 'يتطلب هذا المسار رتبة "قائد قافلة" (رصيد 250,000 دينار)' 
+                                  : 'This route requires "Convoy Leader" status (250,000 Dinars)' 
+                              });
+                           } else {
+                              setConfirmingTrade(route);
+                           }
+                        }}
+                        className={cn(
+                          "w-36 md:w-48 p-2 md:p-2.5 rounded-[20px] border backdrop-blur-md shadow-lg transition-all pointer-events-auto relative",
+                          darkMode ? "bg-black/30 border-gold-900/10" : route.color,
+                          lang === 'ar' ? "text-right" : "text-left",
+                          isStormWarning ? "ring-2 ring-amber-500/40" : "",
+                          isStormBonus ? "ring-2 ring-green-500/40" : ""
+                        )}
+                      >
+                        {isStormWarning && (
+                          <div className={cn(
+                            "absolute -top-1 px-2 py-0.5 bg-amber-600 text-white text-[9px] font-black rounded-full whitespace-nowrap animate-pulse shadow-xl z-50",
+                            lang === 'ar' ? "right-2" : "left-2"
+                          )}>
+                             {lang === 'ar' ? '⚠️ عاصفة!' : '⚠️ STORM!'}
+                          </div>
+                        )}
+                        {isStormBonus && (
+                          <div className={cn(
+                            "absolute -top-1 px-2 py-0.5 bg-green-600 text-white text-[9px] font-black rounded-full whitespace-nowrap animate-bounce shadow-xl z-50",
+                            lang === 'ar' ? "right-2" : "left-2"
+                          )}>
+                            💎 {lang === 'ar' ? 'مكافأة!' : 'BONUS!'}
+                          </div>
+                        )}
+
+                        <div className={cn(
+                          "flex justify-between items-center mb-1 gap-2",
+                          lang === 'ar' ? "flex-row-reverse" : ""
+                        )}>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <div className={cn(
+                              "w-6 h-6 md:w-8 md:h-8 rounded-full flex items-center justify-center shrink-0 shadow-inner",
+                              route.id === 'silk-road' ? "bg-red-500/10 text-red-600" : route.id === 'amber-road' ? "bg-amber-500/10 text-amber-600" : "bg-blue-500/10 text-blue-600"
+                            )}>
+                               <Ship size={12} className="md:w-5 md:h-5" />
+                            </div>
+                            <div className="min-w-0">
+                              <h4 className={cn("font-serif font-black text-[10px] md:text-sm leading-none truncate", darkMode ? "text-gold-100" : "text-gray-900")}>{route.name}</h4>
+                            </div>
+                          </div>
+                          <div className={cn("flex flex-col shrink-0 mt-0.5", lang === 'ar' ? "items-start" : "items-end")}>
+                            <span className={cn(
+                              "text-[9px] md:text-[11px] font-black uppercase tracking-tighter",
+                              isStormBonus ? "text-green-600" : "text-green-600/70"
+                            )}>
+                              +{isStormBonus ? route.profit + 50 : route.profit}%
+                            </span>
                           </div>
                         </div>
 
-                        {/* Curved Arrow Decoration */}
-                        <div className="flex-1 px-2 md:px-8 hidden sm:flex justify-center overflow-visible">
-                          {isRouteLocked ? (
-                            <div className="flex items-center gap-1 text-gray-400">
-                              <AlertCircle size={14} />
-                              <span className="text-[8px] font-bold uppercase tracking-widest">{lang === 'ar' ? 'مقفل' : 'Locked'}</span>
-                            </div>
-                          ) : (
-                            <svg width="100" height="40" viewBox="0 0 100 40" fill="none">
-                              <path d="M10,10 Q50,40 90,10" stroke={p.arrowColor} strokeWidth="3" strokeLinecap="round" />
-                              <path d="M82,10 L90,10 L88,18" stroke={p.arrowColor} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-                            </svg>
-                          )}
+                        <div className={cn(
+                          "flex items-center justify-between mt-1 pt-1 border-t border-black/5",
+                          lang === 'ar' ? "flex-row-reverse" : ""
+                        )}>
+                          <p className="text-[8px] md:text-[10px] text-gray-500 font-bold">{route.cost} {t.currency}</p>
+                          <div className="flex items-center gap-1 opacity-60">
+                            <TrendingUp size={8} />
+                            <span className="text-[7px] md:text-[9px] font-black uppercase">
+                              {isStormBonus ? route.duration + 5 : isStormWarning ? route.duration + 10 : route.duration} {t.minutes}
+                            </span>
+                          </div>
                         </div>
-
-                        <div className={cn("shrink-0 flex flex-col items-end", lang === 'ar' ? "mr-2 md:mr-4" : "ml-2 md:ml-4")}>
-                          <p className="text-lg md:text-xl font-bold text-gray-700 mb-1 md:mb-2">{p.cost} {t.currency}</p>
-                          <button 
-                            disabled={isRouteLocked}
-                            className={cn(
-                              "px-4 md:px-6 py-1.5 md:py-2 rounded-full font-bold text-[10px] md:text-xs uppercase tracking-widest transition-colors shadow-md",
-                              isRouteLocked 
-                                ? "bg-gray-300 text-gray-500 cursor-not-allowed" 
-                                : "bg-[#4a3728] text-white hover:bg-[#2d2118]"
-                            )}
-                          >
-                            {isRouteLocked ? t.locked : t.stake}
-                          </button>
-                        </div>
-                      </div>
+                      </motion.button>
                     );
                   })}
                 </div>
+
               </motion.div>
             )}
 
@@ -1472,9 +1861,312 @@ export default function App() {
               </motion.div>
             )}
 
+            {activeTab === 'quests' && (
+              <motion.div
+                key="quests"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 20 }}
+                className="w-full h-full p-4 lg:p-8 overflow-y-auto"
+              >
+                <div className="max-w-2xl mx-auto space-y-6 pb-20">
+                  <div className="text-center mb-8">
+                     <div className="w-16 h-16 bg-gold-100 rounded-2xl flex items-center justify-center mx-auto mb-4 text-gold-600 border border-gold-200">
+                        <ScrollText size={32} />
+                     </div>
+                     <h3 className="font-serif font-black text-2xl mb-1">{t.quests}</h3>
+                     <p className="text-gray-400 text-sm font-bold uppercase tracking-widest">
+                        {lang === 'ar' ? 'أكمل المهام لتحصل على مكافآت ذهبية' : 'Complete goals to earn gold rewards'}
+                     </p>
+                  </div>
+
+                {/* Quest List */}
+                <div className="space-y-4">
+                  {localQuests.length > 0 ? [...localQuests].sort((a, b) => {
+                    if (a.status === 'claimed' && b.status !== 'claimed') return 1;
+                    if (a.status !== 'claimed' && b.status === 'claimed') return -1;
+                    return 0;
+                  }).map((q) => (
+                    <div key={q.id} className={cn(
+                      "glass-panel p-4 sm:p-6 rounded-[24px] sm:rounded-[32px] border relative overflow-hidden transition-all",
+                      q.status === 'claimed' ? "opacity-60 bg-gray-50 border-gray-100" : (darkMode ? "bg-black/20 border-gold-900/30" : "bg-white border-gold-200")
+                    )}>
+                      <div className="flex justify-between items-start mb-4">
+                        <div className="flex items-center gap-3 sm:gap-4">
+                           <div className={cn(
+                             "w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 border",
+                             q.completed ? "bg-green-100 text-green-600 border-green-200" : "bg-gold-50 text-gold-600 border-gold-200"
+                           )}>
+                             {q.completed ? <CheckCircle2 size={20} className="sm:w-6 sm:h-6" /> : (q.type === 'trade' ? <Ship size={20} className="sm:w-6 sm:h-6" /> : q.type === 'wealth' ? <Coins size={20} className="sm:w-6 sm:h-6" /> : <Home size={20} className="sm:w-6 sm:h-6" />)}
+                           </div>
+                           <div className="min-w-0">
+                             <h4 className="font-serif font-bold text-base sm:text-lg truncate">{q.title}</h4>
+                             <p className="text-xs text-gray-500 truncate max-w-[150px] sm:max-w-none">{q.desc}</p>
+                           </div>
+                        </div>
+                        
+                        <div className="text-right shrink-0">
+                           <span className="text-[9px] sm:text-[10px] font-black uppercase text-gray-400 block mb-0.5">{lang === 'ar' ? 'المكافأة' : 'Reward'}</span>
+                           <span className="font-black text-base sm:text-xl text-gold-600">+{q.reward} <span className="text-[10px] sm:text-xs">{t.currency}</span></span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                         <div className="flex justify-between items-center text-[9px] sm:text-[10px] font-black uppercase tracking-widest">
+                            <span className="text-gray-400">{lang === 'ar' ? 'التقدم' : 'Progress'}</span>
+                            <span className={q.completed ? "text-green-600" : "text-gold-600"}>
+                              {Math.floor(Math.min(100, (q.current / q.target) * 100))}%
+                            </span>
+                         </div>
+                         <div className="h-1.5 sm:h-2 bg-gray-100 rounded-full overflow-hidden">
+                            <motion.div 
+                              initial={{ width: 0 }}
+                              animate={{ width: `${Math.min(100, (q.current / q.target) * 100)}%` }}
+                              className={cn("h-full", q.completed ? "bg-green-500" : "bg-gold-500")}
+                            />
+                         </div>
+                      </div>
+
+                      {q.claimable && q.status !== 'claimed' && (
+                        <button 
+                          onClick={() => claimQuestReward(q.id)}
+                          disabled={isProcessing}
+                          className="w-full mt-4 sm:mt-6 py-3 sm:py-4 bg-gold-900 text-white rounded-xl sm:rounded-2xl font-bold hover:bg-black transition-all shadow-xl animate-bounce text-sm"
+                        >
+                          {lang === 'ar' ? 'استلم المكافأة!' : 'Claim Reward!'}
+                        </button>
+                      )}
+                      
+                      {q.status === 'claimed' && (
+                        <div className="mt-4 sm:mt-6 py-2 sm:py-4 text-center text-green-600 font-bold text-xs sm:text-sm bg-green-50 rounded-xl sm:rounded-2xl border border-green-100">
+                           {lang === 'ar' ? 'تم استلام المكافأة' : 'Reward Claimed'}
+                        </div>
+                      )}
+                    </div>
+                  )) : (
+                      <div className="text-center py-20 text-gray-400 italic">
+                         {lang === 'ar' ? 'جاري تحميل المهام...' : 'Loading quests...'}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </motion.div>
+            )}
+            {activeTab === 'clans' && (
+              <motion.div
+                key="clans"
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="w-full h-full p-4 lg:p-8 overflow-y-auto"
+              >
+                <div className="max-w-4xl mx-auto space-y-8 pb-24">
+                  <div className="text-center mb-10">
+                     <div className="w-20 h-20 bg-amber-100 rounded-[32px] flex items-center justify-center mx-auto mb-4 text-amber-600 border-2 border-amber-200 shadow-xl shadow-amber-500/10">
+                        <Crown size={40} />
+                     </div>
+                     <h3 className="font-serif font-black text-3xl mb-2">{t.clans}</h3>
+                     <p className="text-gray-500 text-sm max-w-md mx-auto">
+                        {lang === 'ar' 
+                          ? 'انضم إلى نقابة قوية لتأمين تجارتك وتجنب غارات اللصوص. القبائل القوية تسيطر على الرمال.' 
+                          : 'Join a powerful trade clan to secure your assets and avoid bandit raids. Strong clans rule the sands.'}
+                     </p>
+                  </div>
+
+                  {myClan ? (
+                    <div className="space-y-6">
+                      <div className={cn(
+                        "glass-panel p-6 sm:p-10 rounded-[48px] border relative overflow-hidden",
+                        darkMode ? "bg-amber-950/20 border-amber-900/50" : "bg-white border-amber-200"
+                      )}>
+                         <div className="absolute top-0 right-0 p-8 opacity-5">
+                            <Crown size={120} />
+                         </div>
+                         <div className="relative flex flex-col md:flex-row justify-between gap-8">
+                            <div>
+                               <span className="text-[10px] font-black uppercase text-amber-600 tracking-widest block mb-2">{lang === 'ar' ? 'نقابتك' : 'Your Clan'}</span>
+                               <h4 className="font-serif font-black text-4xl text-amber-800 mb-4">{myClan.name}</h4>
+                               <div className="flex gap-6">
+                                  <div>
+                                     <p className="text-[10px] font-black uppercase text-gray-400 tracking-widest">{lang === 'ar' ? 'الأعضاء' : 'Members'}</p>
+                                     <p className="font-bold text-xl">{myClan.members}</p>
+                                  </div>
+                                  <div>
+                                     <p className="text-[10px] font-black uppercase text-gray-400 tracking-widest">{lang === 'ar' ? 'ثروة النقابة' : 'Clan Wealth'}</p>
+                                     <p className="font-bold text-xl text-amber-600">{myClan.memberWealth?.toLocaleString()} {t.currency}</p>
+                                  </div>
+                               </div>
+                            </div>
+                            
+                            <div className="flex flex-col justify-center gap-3">
+                               <div className="p-4 bg-green-50 rounded-2xl border border-green-100 flex items-center gap-3">
+                                  <div className="w-10 h-10 bg-green-500 text-white rounded-xl flex items-center justify-center">
+                                     <CheckCircle2 size={24} />
+                                  </div>
+                                  <div>
+                                     <p className="text-[10px] font-black uppercase text-green-600 tracking-widest">{lang === 'ar' ? 'حماية مفعلة' : 'Immunity Active'}</p>
+                                     <p className="text-xs text-green-700 font-bold">{lang === 'ar' ? 'أنت محمي من غارات اللصوص' : 'Safe from bandit raids'}</p>
+                                  </div>
+                               </div>
+                               <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100 flex items-center gap-3">
+                                  <div className="w-10 h-10 bg-blue-500 text-white rounded-xl flex items-center justify-center">
+                                     <Coins size={24} />
+                                  </div>
+                                  <div>
+                                     <p className="text-[10px] font-black uppercase text-blue-600 tracking-widest">{lang === 'ar' ? 'خزينة النقابة' : 'Clan Treasury'}</p>
+                                     <p className="text-xs text-blue-700 font-bold">{Math.floor((myClan.memberWealth || 0) * 0.1).toLocaleString()} {t.currency}</p>
+                                  </div>
+                               </div>
+                            </div>
+                         </div>
+                      </div>
+
+                      {/* Clan Expedition - Added detail */}
+                      <div className={cn(
+                        "p-6 rounded-[32px] border-2 border-dashed border-gold-300",
+                        darkMode ? "bg-black/20" : "bg-gold-50/30"
+                      )}>
+                        <div className="flex items-center justify-between mb-4">
+                          <div className="flex items-center gap-3">
+                            <Ship className="text-gold-600" />
+                            <h5 className="font-black text-lg">{lang === 'ar' ? 'الحملة النشطة' : 'Active Expedition'}</h5>
+                          </div>
+                          <span className="text-xs font-bold text-gold-600 bg-gold-100 px-3 py-1 rounded-full">{lang === 'ar' ? 'جاري التنفيذ' : 'In Progress'}</span>
+                        </div>
+                        <div className="space-y-2">
+                          <div className="flex justify-between text-xs font-bold text-gray-500">
+                             <span>{lang === 'ar' ? 'التقدم' : 'Progress'}</span>
+                             <span>65%</span>
+                          </div>
+                          <div className="h-3 w-full bg-gold-200 rounded-full overflow-hidden">
+                             <motion.div 
+                              initial={{ width: 0 }}
+                              animate={{ width: "65%" }}
+                              className="h-full bg-gold-600 shadow-[0_0_10px_rgba(184,134,11,0.5)]" 
+                             />
+                          </div>
+                          <p className="text-[10px] text-gray-400 font-medium italic mt-2">
+                             {lang === 'ar' ? '* يساهم جميع أعضاء النقابة في نجاح هذه الحملة' : '* All clan members contribute to the success of this expedition'}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
+                       {isCreatingClan ? (
+                         <div className="glass-panel p-8 rounded-[40px] border border-gold-400 flex flex-col items-center text-center justify-center bg-gold-50/30 col-span-1 md:col-span-2">
+                            <h4 className="font-serif font-black text-xl text-gold-700 mb-4">{lang === 'ar' ? 'تأسيس نقابة جديدة' : 'Establish New Clan'}</h4>
+                            <input 
+                              type="text"
+                              value={clanNameInput}
+                              onChange={(e) => setClanNameInput(e.target.value)}
+                              placeholder={lang === 'ar' ? 'اسم النقابة...' : 'Clan Name...'}
+                              className="w-full max-w-sm px-6 py-3 rounded-xl border border-gold-200 mb-4 outline-none focus:ring-2 ring-gold-500"
+                            />
+                            <div className="flex gap-4">
+                              <button 
+                                onClick={() => setIsCreatingClan(false)}
+                                className="px-6 py-2 bg-gray-200 rounded-xl font-bold"
+                              >
+                                {lang === 'ar' ? 'إلغاء' : 'Cancel'}
+                              </button>
+                              <button 
+                                onClick={() => {
+                                  if (clanNameInput.trim()) {
+                                    handleCreateClan(clanNameInput);
+                                    setIsCreatingClan(false);
+                                  }
+                                }}
+                                disabled={isProcessing || !clanNameInput.trim()}
+                                className="px-6 py-2 bg-gold-700 text-white rounded-xl font-bold hover:bg-black transition-all disabled:opacity-50"
+                              >
+                                {lang === 'ar' ? 'تأسيس (50k)' : 'Establish (50k)'}
+                              </button>
+                            </div>
+                         </div>
+                       ) : (
+                         <>
+                           <div className="glass-panel p-8 rounded-[40px] border border-dashed border-gray-300 flex flex-col items-center text-center justify-center bg-gray-50/50">
+                              <h4 className="font-bold mb-2">{lang === 'ar' ? 'أسس نقابتك الخاصة' : 'Form Your Own Clan'}</h4>
+                              <p className="text-xs text-gray-500 mb-6">{lang === 'ar' ? 'يكلف التأسيس 50,000 دينار' : 'Foundation costs 50,000 Dinars'}</p>
+                              <button 
+                                 onClick={() => setIsCreatingClan(true)}
+                                 className="px-8 py-3 bg-gold-900 text-white rounded-2xl font-bold hover:bg-black transition-all"
+                              >
+                                 {lang === 'ar' ? 'تأسيس نقابة' : 'Establish Clan'}
+                              </button>
+                           </div>
+                           
+                           <div className="glass-panel p-8 rounded-[40px] border border-amber-200 bg-amber-50/20 flex flex-col items-center text-center justify-center">
+                              <h4 className="font-bold mb-2">{lang === 'ar' ? 'انضم لنقابة موجودة' : 'Join an Existing Clan'}</h4>
+                              <p className="text-xs text-gray-500 mb-6">{lang === 'ar' ? 'اختر من القائمة أدناه' : 'Select from the leaderboard below'}</p>
+                              <div className="animate-bounce">
+                                 <TrendingUp className="text-amber-500" />
+                              </div>
+                           </div>
+                         </>
+                       )}
+                    </div>
+                  )}
+
+                  <div className="space-y-4">
+                     <h4 className="font-serif font-black text-xl px-4 flex items-center gap-2">
+                        <Gem className="text-amber-500" size={20} />
+                        {t.leaderboard}
+                     </h4>
+                     <div className="space-y-3">
+                        {clans.map((c, idx) => (
+                          <div key={c.id} className={cn(
+                            "glass-panel p-4 sm:p-6 rounded-3xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 group hover:border-amber-400 transition-all",
+                            darkMode ? "bg-black/20 border-gold-900/20" : "bg-white border-gold-100",
+                            profile?.clanId === c.id ? "border-amber-400 ring-2 ring-amber-400/20" : ""
+                          )}>
+                             <div className="flex items-center gap-4 sm:gap-6">
+                                <span className="font-display font-black text-xl sm:text-2xl text-gray-300 w-6 sm:w-8">#{idx + 1}</span>
+                                <div className="min-w-0">
+                                   <h5 className="font-bold text-base sm:text-lg truncate">{c.name}</h5>
+                                   <p className="text-[9px] sm:text-[10px] font-black uppercase text-gray-400 tracking-widest truncate">
+                                      {c.members} {lang === 'ar' ? 'أعضاء' : 'Members'} • {c.leaderName}
+                                   </p>
+                                </div>
+                             </div>
+                             
+                             <div className="flex items-center justify-between sm:justify-end gap-4 sm:gap-8 border-t sm:border-t-0 pt-3 sm:pt-0">
+                                <div className="text-left sm:text-right">
+                                   <p className="text-[8px] sm:text-[10px] font-black uppercase text-amber-600 tracking-widest">{lang === 'ar' ? 'القوة المالية' : 'Financial Power'}</p>
+                                   <p className="font-bold text-sm sm:text-base">{c.memberWealth?.toLocaleString()} {t.currency}</p>
+                                </div>
+                                
+                                {!profile?.clanId && (
+                                  <button 
+                                    onClick={() => handleJoinClan(c.id)}
+                                    disabled={isProcessing}
+                                    className="px-4 sm:px-6 py-1.5 sm:py-2 bg-amber-100 text-amber-700 rounded-full font-bold text-[10px] sm:text-xs hover:bg-amber-200 transition-all border border-amber-200"
+                                  >
+                                    {lang === 'ar' ? 'انضمام' : 'Join'}
+                                  </button>
+                                )}
+                                {profile?.clanId === c.id && (
+                                  <div className="w-8 h-8 rounded-full bg-amber-500 text-white flex items-center justify-center shrink-0">
+                                     <CheckCircle2 size={18} />
+                                  </div>
+                                )}
+                             </div>
+                          </div>
+                        ))}
+                        {clans.length === 0 && (
+                          <div className="p-12 text-center text-gray-400 italic">
+                             {lang === 'ar' ? 'لا توجد نقابات نشطة حتى الآن' : 'No active clans yet'}
+                          </div>
+                        )}
+                     </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
             {activeTab === 'market' && (
               <motion.div
-                key="market"
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
@@ -1558,44 +2250,44 @@ export default function App() {
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -20 }}
-                className="w-full h-full p-6 md:p-8 overflow-y-auto"
+                className="w-full h-full p-4 sm:p-8 overflow-y-auto"
               >
-                <div className="max-w-5xl mx-auto space-y-8">
+                <div className="max-w-5xl mx-auto space-y-6 sm:space-y-8 pb-20">
                   {/* Stats Overview */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
                     <div className={cn(
-                      "glass-panel p-6 rounded-[32px] border relative overflow-hidden",
+                      "glass-panel p-6 rounded-[24px] sm:rounded-[32px] border relative overflow-hidden",
                       darkMode ? "bg-gold-900/10 border-gold-900/40" : "bg-white border-gold-100"
                     )}>
-                      <div className="flex items-center gap-2 mb-4">
-                        <Wallet size={16} className="text-gold-600" />
-                        <span className="text-[10px] font-black uppercase text-gold-600 tracking-widest">{t.totalWealth}</span>
+                      <div className="flex items-center gap-2 mb-3 sm:mb-4">
+                        <Wallet size={14} className="text-gold-600 sm:w-4 sm:h-4" />
+                        <span className="text-[9px] sm:text-[10px] font-black uppercase text-gold-600 tracking-widest">{t.totalWealth}</span>
                       </div>
-                      <h4 className="text-3xl font-bold font-serif">{profile.balance.toLocaleString()} {t.currency}</h4>
-                      <p className="text-[10px] text-gray-400 mt-2">{lang === 'ar' ? 'السيولة المتاحة' : 'Available Liquidity'}</p>
+                      <h4 className="text-2xl sm:text-3xl font-bold font-serif">{profile.balance.toLocaleString()} {t.currency}</h4>
+                      <p className="text-[9px] sm:text-[10px] text-gray-400 mt-2">{lang === 'ar' ? 'السيولة المتاحة' : 'Available Liquidity'}</p>
                     </div>
 
                     <div className={cn(
-                      "glass-panel p-6 rounded-[32px] border relative overflow-hidden",
+                      "glass-panel p-6 rounded-[24px] sm:rounded-[32px] border relative overflow-hidden",
                       darkMode ? "bg-black/40 border-gold-900/20" : "bg-white border-gold-100"
                     )}>
-                      <div className="flex items-center gap-2 mb-4">
-                        <Home size={16} className="text-blue-600" />
-                        <span className="text-[10px] font-black uppercase text-blue-600 tracking-widest">{lang === 'ar' ? 'قيمة الأصول' : 'Asset Value'}</span>
+                      <div className="flex items-center gap-2 mb-3 sm:mb-4">
+                        <Home size={14} className="text-blue-600 sm:w-4 sm:h-4" />
+                        <span className="text-[9px] sm:text-[10px] font-black uppercase text-blue-600 tracking-widest">{lang === 'ar' ? 'قيمة الأصول' : 'Asset Value'}</span>
                       </div>
-                      <h4 className="text-3xl font-bold font-serif">{totalAssetValue.toLocaleString()} {t.currency}</h4>
-                      <p className="text-[10px] text-gray-400 mt-2">{properties.length} {lang === 'ar' ? 'وحدات ممتلكة' : 'Units owned'}</p>
+                      <h4 className="text-2xl sm:text-3xl font-bold font-serif">{totalAssetValue.toLocaleString()} {t.currency}</h4>
+                      <p className="text-[9px] sm:text-[10px] text-gray-400 mt-2">{properties.length} {lang === 'ar' ? 'وحدات ممتلكة' : 'Units owned'}</p>
                     </div>
 
                     <div className={cn(
-                      "glass-panel p-6 rounded-[32px] border relative overflow-hidden bg-gradient-to-br from-gold-600 to-gold-800 text-white border-gold-500"
+                      "glass-panel p-6 rounded-[24px] sm:rounded-[32px] border relative overflow-hidden bg-gradient-to-br from-gold-600 to-gold-800 text-white border-gold-500 shadow-xl shadow-gold-500/20"
                     )}>
-                      <div className="flex items-center gap-2 mb-4">
-                        <Crown size={16} className="text-gold-100" />
-                        <span className="text-[10px] font-black uppercase text-gold-100 tracking-widest">{lang === 'ar' ? 'صافي الثروة' : 'Net Worth'}</span>
+                      <div className="flex items-center gap-2 mb-3 sm:mb-4">
+                        <Crown size={14} className="text-gold-100 sm:w-4 sm:h-4" />
+                        <span className="text-[9px] sm:text-[10px] font-black uppercase text-gold-100 tracking-widest">{lang === 'ar' ? 'صافي الثروة' : 'Net Worth'}</span>
                       </div>
-                      <h4 className="text-3xl font-bold font-serif">{netWorth.toLocaleString()} {t.currency}</h4>
-                      <p className="text-[10px] text-gold-200 mt-2">{lang === 'ar' ? 'إجمالي قيمة الإمبراطورية' : 'Total Empire Valuation'}</p>
+                      <h4 className="text-2xl sm:text-3xl font-bold font-serif">{netWorth.toLocaleString()} {t.currency}</h4>
+                      <p className="text-[9px] sm:text-[10px] text-gold-200 mt-2">{lang === 'ar' ? 'إجمالي قيمة الإمبراطورية' : 'Total Empire Valuation'}</p>
                     </div>
                   </div>
 

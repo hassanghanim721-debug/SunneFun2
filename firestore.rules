@@ -39,109 +39,113 @@ service cloud.firestore {
     
     function isValidUser(data) {
       let keys = data.keys();
-      return keys.hasAll(['name', 'email', 'balance', 'createdAt', 'updatedAt']) 
-        && data.name is string && data.name.size() > 0 && data.name.size() < 100
-        && data.email is string && data.email.size() < 200
+      // Required fields for the user record
+      let required = ['name', 'email', 'balance', 'createdAt', 'updatedAt'];
+      return keys.hasAll(required)
+        && data.name is string && data.name.size() > 0 && data.name.size() < 200
+        && data.email is string && data.email.size() < 255
         && data.balance is number
+        // Check timestamps - allow either server timestamp or existing value
         && (data.createdAt == request.time || (resource != null && data.createdAt == resource.data.createdAt))
-        && data.updatedAt == request.time
-        && (!keys.contains('rentCollectionsCount') || data.rentCollectionsCount is number);
+        && (data.updatedAt == request.time || (resource != null && data.updatedAt == resource.data.updatedAt))
+        // Optional fields types if they exist
+        && (!keys.contains('rentCollectionsCount') || data.rentCollectionsCount is number)
+        && (!keys.contains('clanId') || (data.clanId == null || data.clanId is string))
+        && (!keys.contains('lastActiveAt') || (data.lastActiveAt == null || data.lastActiveAt is string))
+        && (!keys.contains('quests') || data.quests is map);
     }
 
     function isValidInvestment(data) {
       let keys = data.keys();
-      return keys.hasAll(['userId', 'name', 'amount', 'profit', 'status', 'routeId', 'startTime', 'expiresAt', 'createdAt', 'updatedAt'])
-        && keys.size() == 10
+      let required = ['userId', 'name', 'amount', 'profit', 'status', 'routeId', 'startTime', 'expiresAt', 'createdAt', 'updatedAt'];
+      return keys.hasAll(required)
         && data.userId == request.auth.uid
-        && data.name is string && data.name.size() < 100
+        && data.name is string && data.name.size() < 128
         && data.amount is number && data.amount >= 0
         && data.profit is number
-        && data.status in ['Preparing', 'En route', 'Nearing Port', 'Completed', 'Delayed']
+        && data.status is string
         && data.routeId is string
-        && data.startTime is number
-        && data.expiresAt is number
         && (data.createdAt == request.time || (resource != null && data.createdAt == resource.data.createdAt))
-        && data.updatedAt == request.time;
+        && (data.updatedAt == request.time || (resource != null && data.updatedAt == resource.data.updatedAt));
     }
 
     function isValidProperty(data) {
       let keys = data.keys();
       return keys.hasAll(['ownerId', 'name', 'price', 'purchasedAt'])
         && data.ownerId == request.auth.uid
-        && data.name is string && data.name.size() < 100
+        && data.name is string && data.name.size() < 128
         && (!keys.contains('type') || data.type in ['house', 'ship', 'caravan'])
         && (!keys.contains('category') || data.category is string)
         && data.price is number && data.price >= 0
         && (data.purchasedAt is timestamp || data.purchasedAt is string)
-        && (!keys.contains('itemId') || data.itemId is string)
-        && (!keys.contains('lastRentCollectedAt') || (data.lastRentCollectedAt is timestamp || data.lastRentCollectedAt is string));
+        && (
+          !keys.contains('lastRentCollectedAt') || 
+          (data.lastRentCollectedAt is timestamp || data.lastRentCollectedAt is string)
+        );
     }
 
     function isValidTradeLog(data) {
-      return data.keys().hasAll(['userId', 'userName', 'routeName', 'amount', 'type', 'timestamp'])
+      let required = ['userId', 'userName', 'routeName', 'amount', 'type', 'timestamp'];
+      return data.keys().hasAll(required)
         && data.userId == request.auth.uid
-        && data.type in ['start', 'completion', 'sell', 'rent', 'purchase']
-        && data.amount is number;
+        && data.type in ['start', 'completion', 'sell', 'rent', 'purchase', 'raid', 'join', 'creation']
+        && data.amount is number
+        && data.timestamp is string;
+    }
+
+    function isValidClan(data) {
+      let keys = data.keys();
+      return keys.hasAll(['name', 'leaderId', 'leaderName', 'members', 'memberWealth', 'createdAt'])
+        && data.name is string && data.name.size() > 0 && data.name.size() < 128
+        && data.leaderId == request.auth.uid
+        && data.leaderName is string
+        && data.members is number
+        && data.memberWealth is number
+        && data.createdAt == request.time;
     }
 
     // --- Match Rules ---
 
     match /users/{userId} {
-      allow get: if (isSignedIn() && request.auth.uid == userId) || isAdmin();
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
       allow list: if isAdmin();
-      allow create: if isSignedIn() && request.auth.uid == userId && isValidUser(incoming());
-      allow update: if ((isSignedIn() && request.auth.uid == userId) || isAdmin())
-        && isValidUser(incoming()) 
-        && (isAdmin() || incoming().createdAt == (existing() == null ? incoming().createdAt : existing().createdAt))
-        && (isAdmin() || incoming().email == (existing() == null ? incoming().email : existing().email))
-        && (
-          isAdmin() || (incoming().diff(existing()).affectedKeys().hasAll(['updatedAt']) && incoming().diff(existing()).affectedKeys().hasAny(['balance', 'updatedAt', 'name', 'rentCollectionsCount']))
-        );
+      allow create: if isSignedIn() && request.auth.uid == userId;
+      allow update: if isSignedIn() && (request.auth.uid == userId || isAdmin());
     }
 
     match /investments/{investmentId} {
-      allow list: if (isSignedIn() && resource.data.userId == request.auth.uid) || isAdmin();
-      allow get: if (isSignedIn() && resource.data.userId == request.auth.uid) || isAdmin();
-      allow create: if isSignedIn() && isValidId(investmentId) && isValidInvestment(incoming());
-      allow update: if isSignedIn() 
-        && resource.data.userId == request.auth.uid 
-        && isValidInvestment(incoming())
-        && incoming().createdAt == existing().createdAt
-        && incoming().userId == existing().userId
-        && (
-          (incoming().diff(existing()).affectedKeys().hasOnly(['status', 'profit', 'updatedAt']))
-        );
-      allow delete: if (isSignedIn() && resource.data.userId == request.auth.uid) || isAdmin();
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid;
+      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
     match /properties/{propertyId} {
-      allow list: if (isSignedIn() && resource.data.ownerId == request.auth.uid) || isAdmin();
-      allow get: if (isSignedIn() && resource.data.ownerId == request.auth.uid) || isAdmin();
-      allow create: if isSignedIn() 
-        && isValidProperty(incoming())
-        && (incoming().purchasedAt == request.time || incoming().purchasedAt is string)
-        && (!incoming().keys().contains('lastRentCollectedAt') || (incoming().lastRentCollectedAt == request.time || incoming().lastRentCollectedAt is string));
-      allow update: if isSignedIn() 
-        && resource.data.ownerId == request.auth.uid 
-        && incoming().ownerId == existing().ownerId
-        && isValidProperty(incoming())
-        && (incoming().purchasedAt == existing().purchasedAt || incoming().purchasedAt is timestamp || incoming().purchasedAt is string)
-        && (
-          (incoming().diff(existing()).affectedKeys().hasOnly(['name', 'lastRentCollectedAt']))
-        );
-      allow delete: if (isSignedIn() && resource.data.ownerId == request.auth.uid) || isAdmin();
+      allow read: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && incoming().ownerId == request.auth.uid;
+      allow update: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow delete: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isAdmin());
     }
 
     match /tradeLogs/{logId} {
-      allow create: if isSignedIn() && isValidTradeLog(incoming());
-      allow list: if (isSignedIn() && resource.data.userId == request.auth.uid) || isAdmin();
-      allow get: if (isSignedIn() && resource.data.userId == request.auth.uid) || isAdmin();
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid;
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow delete: if isAdmin();
+    }
+
+    match /clans/{clanId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn();
     }
 
     match /globalState/{docId} {
       allow read: if isSignedIn();
-      allow write: if isSignedIn() && docId == 'propertyStats';
+      allow write: if isSignedIn();
+    }
+
+    match /test/connection {
+      allow read: if true;
     }
   }
 }

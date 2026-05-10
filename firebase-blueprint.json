@@ -8,6 +8,16 @@
         "name": { "type": "string", "description": "The trader's name." },
         "email": { "type": "string", "format": "email", "description": "Contact email." },
         "balance": { "type": "number", "description": "Total Dinars in the treasury." },
+        "clanId": { "type": "string", "description": "ID of the clan the user belongs to." },
+        "lastActiveAt": { "type": "string", "format": "date-time", "description": "Last time the user was online." },
+        "quests": {
+          "type": "object",
+          "description": "Local quests state synced only on completion.",
+          "properties": {
+            "dailyQuests": { "type": "array", "items": { "type": "object" } },
+            "lastQuestReset": { "type": "string", "format": "date-time" }
+          }
+        },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -58,16 +68,42 @@
         "amount": { "type": "number" },
         "profitPercent": { "type": "number" },
         "profitDinars": { "type": "number" },
-        "type": { "type": "string", "enum": ["start", "completion", "sell", "rent"] },
+        "type": { "type": "string", "enum": ["start", "completion", "sell", "rent", "raid"] },
         "timestamp": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "userName", "routeName", "amount", "type", "timestamp"]
+    },
+    "Clan": {
+      "title": "Clan",
+      "description": "A group of traders.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "leaderId": { "type": "string" },
+        "memberCount": { "type": "number" },
+        "totalWealth": { "type": "number" },
+        "activeExpedition": {
+          "type": "object",
+          "properties": {
+            "targetAmount": { "type": "number" },
+            "currentAmount": { "type": "number" },
+            "contributions": { "type": "object" },
+            "startTime": { "type": "string", "format": "date-time" }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "leaderId", "memberCount", "totalWealth", "createdAt"]
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": "User",
       "description": "User profiles and balances."
+    },
+    "/clans/{clanId}": {
+      "schema": "Clan",
+      "description": "Clan groups."
     },
     "/investments/{investmentId}": {
       "schema": "Investment",
