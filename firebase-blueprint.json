@@ -52,6 +52,7 @@
         "type": { "type": "string", "enum": ["house", "ship", "caravan"] },
         "category": { "type": "string" },
         "price": { "type": "number" },
+        "isListed": { "type": "boolean" },
         "purchasedAt": { "type": "string", "format": "date-time" },
         "lastRentCollectedAt": { "type": "string", "format": "date-time" }
       },

@@ -37,7 +37,13 @@
 }
 
 .glass-panel {
-  @apply bg-white/80 backdrop-blur-md border border-white/20;
+  @apply bg-white/95 backdrop-blur-md border-2 border-dashed border-gold-300 rounded-[32px] transition-all duration-300;
+}
+
+@variant dark (&:where(.dark, .dark *));
+
+.glass-panel {
+  @apply dark:bg-black/20 dark:border-gold-900/60;
 }
 
 .ornament-pattern {

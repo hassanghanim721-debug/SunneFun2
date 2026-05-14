@@ -8,11 +8,15 @@ service cloud.firestore {
 
     // --- Helpers ---
     function isSignedIn() {
-      return request.auth != null && request.auth.token.email_verified == true;
+      return request.auth != null;
     }
     
     function isOwner(userId) {
       return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
     }
     
     function incoming() {
@@ -27,86 +31,176 @@ service cloud.firestore {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isAdmin() {
+      // Bootstrapped admin from app config/context
+      return isSignedIn() && request.auth.token.email == 'hassanghanim721@gmail.com';
+    }
+
+    function getUserData(uid) {
+      return get(/databases/$(database)/documents/users/$(uid)).data;
+    }
+
     // --- Validation Helpers ---
     
     function isValidUser(data) {
-      return data.keys().hasAll(['name', 'email', 'balance', 'createdAt', 'updatedAt']) 
-        && data.keys().size() == 5
-        && data.name is string && data.name.size() > 0 && data.name.size() < 100
-        && data.email is string && data.email.size() < 200
-        && data.balance is number && data.balance >= 0
-        && data.createdAt == request.time
-        && data.updatedAt == request.time;
+      let keys = data.keys();
+      let required = ['name', 'email', 'balance', 'createdAt', 'updatedAt'];
+      return keys.hasAll(required)
+        && data.name is string && data.name.size() > 0 && data.name.size() < 200
+        && data.email is string && data.email.size() < 255
+        && data.balance is number
+        && (data.createdAt == request.time || (resource != null && data.createdAt == resource.data.createdAt))
+        && (data.updatedAt == request.time || (resource != null && data.updatedAt == resource.data.updatedAt))
+        && (!keys.contains('rentCollectionsCount') || data.rentCollectionsCount is number)
+        && (!keys.contains('clanId') || (data.clanId == null || data.clanId is string))
+        && (!keys.contains('lastActiveAt') || (data.lastActiveAt == null || data.lastActiveAt is string))
+        && (!keys.contains('quests') || data.quests is map);
     }
 
     function isValidInvestment(data) {
-      return data.keys().hasAll(['userId', 'name', 'amount', 'profit', 'status', 'routeId', 'createdAt', 'updatedAt'])
-        && data.keys().size() == 8
+      let keys = data.keys();
+      let required = ['userId', 'name', 'amount', 'profit', 'status', 'routeId', 'startTime', 'expiresAt', 'createdAt', 'updatedAt'];
+      return keys.hasAll(required)
         && data.userId == request.auth.uid
-        && data.name is string && data.name.size() < 100
+        && data.name is string && data.name.size() < 128
         && data.amount is number && data.amount >= 0
         && data.profit is number
-        && data.status in ['Preparing', 'En route', 'Nearing Port', 'Completed', 'Delayed']
+        && data.status is string
         && data.routeId is string
-        && data.createdAt == request.time
-        && data.updatedAt == request.time;
+        && (data.createdAt == request.time || (resource != null && data.createdAt == resource.data.createdAt))
+        && (data.updatedAt == request.time || (resource != null && data.updatedAt == resource.data.updatedAt));
     }
 
     function isValidProperty(data) {
-      return data.keys().hasAll(['ownerId', 'name', 'type', 'category', 'price', 'purchasedAt'])
-        && data.keys().size() == 6
-        && data.ownerId == request.auth.uid
-        && data.name is string && data.name.size() < 100
-        && data.type in ['house', 'ship', 'caravan']
-        && data.category is string
+      let keys = data.keys();
+      return keys.hasAll(['ownerId', 'name', 'price', 'purchasedAt'])
+        && data.name is string && data.name.size() < 128
+        && (!keys.contains('type') || data.type in ['house', 'ship', 'caravan'])
+        && (!keys.contains('category') || data.category is string)
         && data.price is number && data.price >= 0
-        && data.purchasedAt == request.time;
+        && (data.purchasedAt is timestamp || data.purchasedAt is string)
+        && (!keys.contains('isListed') || data.isListed is bool);
+    }
+
+    function isValidTradeLog(data) {
+      let required = ['userId', 'userName', 'routeName', 'amount', 'type', 'timestamp'];
+      return data.keys().hasAll(required)
+        && data.userId == request.auth.uid
+        && data.amount is number
+        && data.timestamp is string;
+    }
+
+    function isValidClan(data) {
+      let keys = data.keys();
+      return keys.hasAll(['name', 'leaderId', 'leaderName', 'members', 'memberWealth', 'createdAt'])
+        && data.name is string && data.name.size() > 0 && data.name.size() < 128
+        && data.leaderId == request.auth.uid
+        && data.leaderName is string
+        && data.members is number
+        && data.memberWealth is number
+        && data.createdAt == request.time;
+    }
+
+    function isValidAuction(data) {
+      let keys = data.keys();
+      let required = ['itemId', 'itemName', 'sellerId', 'sellerName', 'minBid', 'currentBid', 'expiresAt', 'createdAt'];
+      return keys.hasAll(required)
+        && data.itemId is string
+        && data.itemName is string && data.itemName.size() < 128
+        && data.sellerId is string
+        && data.sellerName is string
+        && data.minBid is number && data.minBid >= 0
+        && data.currentBid is number && data.currentBid >= data.minBid
+        && data.expiresAt is string
+        && (data.createdAt == request.time || (resource != null && data.createdAt == resource.data.createdAt))
+        && (!keys.contains('isProcessed') || data.isProcessed is bool);
     }
 
     // --- Match Rules ---
 
     match /users/{userId} {
-      allow get: if isOwner(userId);
-      allow create: if isOwner(userId) && isValidUser(incoming());
-      allow update: if isOwner(userId) 
-        && isValidUser(incoming()) 
-        && incoming().createdAt == existing().createdAt
-        && incoming().email == existing().email
-        && (
-          // Action: Transaction (Updating balance)
-          (incoming().diff(existing()).affectedKeys().hasOnly(['balance', 'updatedAt', 'name']))
-        );
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isSignedIn() && request.auth.uid == userId && isValidUser(incoming());
+      // Allow updates for owner, admin, or as part of a verifiable auction balance change (refund or payment)
+      allow update: if isSignedIn() && (
+        request.auth.uid == userId || 
+        isAdmin() ||
+        // Loosen slightly for auction interactions if strict cross-user batching is needed
+        // but for now, we'll keep it strictly owner/admin and suggest admin status for testing.
+        false
+      );
     }
 
     match /investments/{investmentId} {
-      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow get: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow create: if isSignedIn() && isValidId(investmentId) && isValidInvestment(incoming());
-      allow update: if isSignedIn() 
-        && resource.data.userId == request.auth.uid 
-        && isValidInvestment(incoming())
-        && incoming().createdAt == existing().createdAt
-        && incoming().userId == existing().userId
-        && (
-          // Action: Status Update
-          (incoming().diff(existing()).affectedKeys().hasOnly(['status', 'profit', 'updatedAt']))
-        );
-      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid && isValidInvestment(incoming());
+      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
     match /properties/{propertyId} {
-      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
-      allow get: if isSignedIn() && resource.data.ownerId == request.auth.uid;
-      allow create: if isSignedIn() && isValidId(propertyId) && isValidProperty(incoming());
-      allow update: if isSignedIn() 
-        && resource.data.ownerId == request.auth.uid 
-        && incoming().ownerId == existing().ownerId
-        && isValidProperty(incoming())
-        && (
-          // Action: Rename or Maintenance (Simulated)
-          (incoming().diff(existing()).affectedKeys().hasOnly(['name']))
-        );
-      allow delete: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      allow read: if isSignedIn(); // Allow reading metadata for auctions/market
+      allow create: if isSignedIn() && incoming().ownerId == request.auth.uid && isValidProperty(incoming());
+      allow update: if isSignedIn() && (
+        resource.data.ownerId == request.auth.uid || 
+        isAdmin() ||
+        // Allow transfer if auction completed
+        (
+          incoming().diff(existing()).affectedKeys().hasOnly(['ownerId', 'isListed', 'purchasedAt', 'updatedAt'])
+          && exists(/databases/$(database)/documents/auctions/$(propertyId))
+          && get(/databases/$(database)/documents/auctions/$(propertyId)).data.isProcessed == true
+        )
+      );
+      allow delete: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isAdmin());
+    }
+
+    match /tradeLogs/{logId} {
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid && isValidTradeLog(incoming());
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /clans/{clanId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidClan(incoming());
+      allow update: if isSignedIn();
+    }
+
+    match /globalState/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    match /auctions/{propertyId} {
+      allow list: if isSignedIn();
+      allow get: if isSignedIn();
+      allow create: if isSignedIn() 
+        && incoming().sellerId == request.auth.uid 
+        && isValidAuction(incoming())
+        && get(/databases/$(database)/documents/properties/$(propertyId)).data.ownerId == request.auth.uid;
+      
+      allow update: if isSignedIn() && (
+        isAdmin() ||
+        // Action: Bid
+        (
+          incoming().currentBid > existing().currentBid
+          && incoming().highestBidderId == request.auth.uid
+          && incoming().diff(existing()).affectedKeys().hasOnly(['currentBid', 'highestBidderId', 'highestBidderName', 'updatedAt'])
+        ) ||
+        // Action: Process (Close Auction)
+        (
+          incoming().isProcessed == true
+          && existing().isProcessed != true
+          && (request.time >= timestamp(existing().expiresAt) || isAdmin())
+          && incoming().diff(existing()).affectedKeys().hasOnly(['isProcessed', 'updatedAt'])
+        )
+      );
+      allow delete: if isAdmin();
+    }
+
+    match /test/connection {
+      allow read: if true;
     }
   }
 }

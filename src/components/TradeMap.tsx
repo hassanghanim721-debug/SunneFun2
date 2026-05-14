@@ -7,9 +7,10 @@ interface TradeMapProps {
   lang: 'en' | 'ar';
   onPinClick: (routeId: string) => void;
   activeStormRoute?: string | null;
+  darkMode?: boolean;
 }
 
-export const TradeMap: React.FC<TradeMapProps> = ({ lang, onPinClick, activeStormRoute }) => {
+export const TradeMap: React.FC<TradeMapProps> = ({ lang, onPinClick, activeStormRoute, darkMode }) => {
   const t = TRANSLATIONS[lang];
 
   const PINS = [
@@ -19,9 +20,15 @@ export const TradeMap: React.FC<TradeMapProps> = ({ lang, onPinClick, activeStor
   ];
 
   return (
-    <div className="w-full h-full bg-[#f4f1ea] relative overflow-hidden group/map select-none">
+    <div className={cn(
+      "w-full h-full relative overflow-hidden group/map select-none transition-colors duration-1000",
+      darkMode ? "bg-[#121212]" : "bg-[#f4f1ea]"
+    )}>
       {/* Parchment Overlay Pattern */}
-      <div className="absolute inset-0 opacity-10 pointer-events-none z-10" style={{ backgroundImage: 'url("https://www.transparenttextures.com/patterns/handmade-paper.png")' }} />
+      <div className={cn(
+        "absolute inset-0 pointer-events-none z-10 transition-opacity duration-1000",
+        darkMode ? "opacity-5 invert" : "opacity-10"
+      )} style={{ backgroundImage: 'url("https://www.transparenttextures.com/patterns/handmade-paper.png")' }} />
       
       {/* Sandstorm Effect Overlay - Localized */}
       <AnimatePresence>
@@ -31,13 +38,16 @@ export const TradeMap: React.FC<TradeMapProps> = ({ lang, onPinClick, activeStor
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className={cn(
-              "absolute z-50 pointer-events-none overflow-hidden rounded-full blur-xl border-4 border-amber-600/30",
+              "absolute z-50 pointer-events-none overflow-hidden rounded-full blur-xl border-4",
+              darkMode ? "border-amber-900/20" : "border-amber-600/30",
               activeStormRoute === 'silk-road' 
                 ? "top-[32%] right-[5%] w-24 h-24 md:w-40 md:h-40" 
                 : "top-[32%] right-[15%] w-24 h-24 md:w-40 md:h-40"
             )}
             style={{
-              background: 'radial-gradient(circle at center, rgba(146, 64, 14, 0.4) 0%, rgba(146, 64, 14, 0.1) 70%, transparent 100%)'
+              background: darkMode 
+                ? 'radial-gradient(circle at center, rgba(120, 53, 15, 0.3) 0%, rgba(120, 53, 15, 0.05) 70%, transparent 100%)'
+                : 'radial-gradient(circle at center, rgba(146, 64, 14, 0.4) 0%, rgba(146, 64, 14, 0.1) 70%, transparent 100%)'
             }}
           >
             {[...Array(20)].map((_, i) => (
@@ -55,7 +65,10 @@ export const TradeMap: React.FC<TradeMapProps> = ({ lang, onPinClick, activeStor
                   delay: Math.random() * 1,
                   ease: "linear"
                 }}
-                className="absolute w-16 md:w-32 h-0.5 bg-gradient-to-r from-transparent via-amber-600/60 to-transparent blur-[1px]"
+                className={cn(
+                  "absolute w-16 md:w-32 h-0.5 bg-gradient-to-r from-transparent via-amber-600/60 to-transparent blur-[1px]",
+                  darkMode && "via-amber-900/40"
+                )}
               />
             ))}
           </motion.div>
@@ -72,7 +85,10 @@ export const TradeMap: React.FC<TradeMapProps> = ({ lang, onPinClick, activeStor
         </div>
       )}
 
-      <div className="relative w-full h-full flex items-center justify-center">
+      <div className={cn(
+        "relative w-full h-full flex items-center justify-center transition-all duration-1000",
+        darkMode ? "brightness-[0.4] grayscale-[0.6] contrast-[1.1]" : ""
+      )}>
         <svg
           viewBox="0 0 1000 1000"
           className="w-full h-full transition-transform duration-700"
@@ -85,9 +101,9 @@ export const TradeMap: React.FC<TradeMapProps> = ({ lang, onPinClick, activeStor
           </defs>
 
           {/* Ocean with Texture */}
-          <rect width="1000" height="1000" fill="#a9d6e5" />
+          <rect width="1000" height="1000" fill={darkMode ? "#0c1a2e" : "#a9d6e5"} className="transition-colors duration-1000" />
           <path d="M50,50 L950,50 L950,400 Q800,450 700,400 Q550,350 450,450 Q300,550 400,650 Q450,750 600,750 Q800,750 850,850 L850,950 L50,950 Z" 
-                fill="#f4f1ea" stroke="#8b7355" strokeWidth="2" />
+                fill={darkMode ? "#1a1410" : "#f4f1ea"} stroke={darkMode ? "#3d2b1f" : "#8b7355"} strokeWidth="2" className="transition-colors duration-1000" />
 
           {/* Mountains & Trees */}
           <g opacity="0.4" stroke="#8b7355" strokeWidth="1" fill="none">
@@ -137,17 +153,50 @@ export const TradeMap: React.FC<TradeMapProps> = ({ lang, onPinClick, activeStor
             <text fontSize="30" dy="15" dx="-15">⛵</text>
           </motion.g>
 
-          {/* Animated Camel */}
+          {/* Animated Horse (Silk Road) */}
           <motion.g
             animate={{ 
-              x: [850, 300, 850], 
-              y: [250, 350, 250],
-              scaleX: [-1, 1, -1]
+              x: [850, 575, 300, 300, 300, 300, 575, 850, 850, 850], 
+              y: [250, 300, 350, 350, 350, 350, 300, 250, 250, 250],
+              scaleX: [1, 1, 1, 1, -1, -1, -1, -1, 1, 1]
             }}
-            transition={{ duration: 55, repeat: Infinity, ease: "linear" }}
+            transition={{ 
+              duration: 60, 
+              repeat: Infinity, 
+              ease: "linear",
+              times: [0, 0.22, 0.45, 0.47, 0.5, 0.5, 0.72, 0.95, 0.97, 1]
+            }}
           >
-            <text fontSize="25" dy="12" dx="-12">🐪</text>
+            <text fontSize="25" dy="12" dx="-12">🐎</text>
           </motion.g>
+
+          {/* Animated Amber Road Convoy (1 Horse + 3 Camels) */}
+          <g>
+            {[
+              { char: '🐎', delay: 0 },
+              { char: '🐪', delay: 0.8 },
+              { char: '🐪', delay: 1.6 },
+              { char: '🐪', delay: 2.4 }
+            ].map((unit, index) => (
+              <motion.g
+                key={index}
+                animate={{ 
+                  x: [300, 262, 300, 412, 600, 600, 600, 412, 300, 262, 300, 300, 300], 
+                  y: [350, 493, 625, 743, 850, 850, 850, 743, 625, 493, 350, 350, 350],
+                  scaleX: [-1, -1, -1, -1, -1, -1, 1, 1, 1, 1, 1, 1, 1]
+                }}
+                transition={{ 
+                  duration: 80, 
+                  repeat: Infinity, 
+                  ease: "linear",
+                  delay: unit.delay,
+                  times: [0, 0.11, 0.22, 0.33, 0.45, 0.47, 0.5, 0.61, 0.72, 0.83, 0.95, 0.97, 1]
+                }}
+              >
+                <text fontSize="22" dy="12" dx="-12">{unit.char}</text>
+              </motion.g>
+            ))}
+          </g>
 
           {/* Interactive Pins */}
           {PINS.map((pin) => (

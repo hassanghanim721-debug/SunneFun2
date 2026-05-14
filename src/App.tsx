@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { TradeMap } from './components/TradeMap';
 import { Auth } from './components/Auth';
@@ -31,6 +31,13 @@ import { TRANSLATIONS } from './constants';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('map');
+  const CAPS: Record<string, number> = {
+    'nomad-tent': 8000,
+    'merchant-loft': 1000,
+    'oasis-inn': 500,
+    'royal-castle': 500
+  };
+
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<any>(null);
   const [activeInvestments, setActiveInvestments] = useState<any[]>([]);
@@ -42,7 +49,9 @@ export default function App() {
   const [darkMode, setDarkMode] = useState(false);
   const [confirmingTrade, setConfirmingTrade] = useState<any>(null);
   const [tradeQuantity, setTradeQuantity] = useState(1);
-  const [confirmingSell, setConfirmingSell] = useState<{id: string, name: string, price: number} | null>(null);
+  const [confirmingSell, setConfirmingSell] = useState<{ ownedInstances: any[], itemId: string, name: string, price: number } | null>(null);
+  const [confirmingAssetPurchase, setConfirmingAssetPurchase] = useState<{ item: any, initialQuantity: number } | null>(null);
+  const [modalQuantity, setModalQuantity] = useState(1);
   const [isProcessing, setIsProcessing] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [newName, setNewName] = useState('');
@@ -77,8 +86,45 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  const isConvoyLeader = (profile?.balance || 0) >= 250000;
+  const getUserRank = (balance: number = 0) => {
+    if (balance >= 500000) {
+      return {
+        title: lang === 'ar' ? 'سلطان' : 'Sultan',
+        icon: Crown,
+        color: 'text-amber-600',
+        borderColor: 'border-amber-400',
+        bgColor: 'bg-amber-100/50',
+        glow: 'shadow-[0_0_15px_rgba(251,191,36,0.4)]',
+        rank: 3
+      };
+    }
+    if (balance >= 100000) {
+      return {
+        title: lang === 'ar' ? 'تاجر مشهور' : 'Famous Merchant',
+        icon: Gem,
+        color: 'text-blue-600',
+        borderColor: 'border-blue-300',
+        bgColor: 'bg-blue-50',
+        glow: 'shadow-[0_0_10px_rgba(59,130,246,0.3)]',
+        rank: 2
+      };
+    }
+    return {
+      title: lang === 'ar' ? 'تاجر مبتدئ' : 'Beginner Merchant',
+      icon: Store,
+      color: 'text-green-600',
+      borderColor: 'border-green-200',
+      bgColor: 'bg-green-50',
+      glow: '',
+      rank: 1
+    };
+  };
+
+  const totalAssetValue = properties.reduce((acc, p) => acc + (p.price || 0), 0);
+  const netWorth = (profile?.balance || 0) + totalAssetValue;
+  const isConvoyLeader = netWorth >= 250000;
   const isClanMember = !!profile?.clanId;
+  const userRank = profile ? getUserRank(netWorth) : null;
 
   const hasAutoCollect = (profile?.rentCollectionsCount || 0) >= 10;
 
@@ -111,8 +157,16 @@ export default function App() {
     localStorage.setItem('darkMode', darkMode.toString());
   }, [darkMode]);
 
-  const t = TRANSLATIONS[lang];
-  
+  const t = TRANSLATIONS[lang as keyof typeof TRANSLATIONS];
+
+  const getRouteIcon = (routeId: string, size = 24) => {
+    switch (routeId) {
+      case 'silk-road': return <span className="flex items-center justify-center" style={{ fontSize: size * 0.8 }}>🐎</span>;
+      case 'amber-road': return <span className="flex items-center justify-center" style={{ fontSize: size * 0.8 }}>🐪</span>;
+      default: return <Ship size={size} />;
+    }
+  };
+
   useEffect(() => {
     if (!user) return;
     
@@ -191,42 +245,6 @@ export default function App() {
       setIsProcessing(false);
     }
   };
-
-  const getUserRank = (balance: number = 0) => {
-    if (balance >= 500000) {
-      return {
-        title: lang === 'ar' ? 'سلطان' : 'Sultan',
-        icon: Crown,
-        color: 'text-amber-600',
-        borderColor: 'border-amber-400',
-        bgColor: 'bg-amber-100/50',
-        glow: 'shadow-[0_0_15px_rgba(251,191,36,0.4)]',
-        rank: 3
-      };
-    }
-    if (balance >= 100000) {
-      return {
-        title: lang === 'ar' ? 'تاجر مشهور' : 'Famous Merchant',
-        icon: Gem,
-        color: 'text-blue-600',
-        borderColor: 'border-blue-300',
-        bgColor: 'bg-blue-50',
-        glow: 'shadow-[0_0_10px_rgba(59,130,246,0.3)]',
-        rank: 2
-      };
-    }
-    return {
-      title: lang === 'ar' ? 'تاجر مبتدئ' : 'Beginner Merchant',
-      icon: Store,
-      color: 'text-green-600',
-      borderColor: 'border-green-200',
-      bgColor: 'bg-green-50',
-      glow: '',
-      rank: 1
-    };
-  };
-
-  const userRank = profile ? getUserRank(profile.balance) : null;
 
   useEffect(() => {
     let unsubs: (() => void)[] = [];
@@ -417,29 +435,27 @@ export default function App() {
       const now = Date.now();
       setCurrentTime(now);
       
-      // Proactive maturation check
-      const readyToComplete = activeInvestments.filter(inv => 
+      // Proactive maturation check for trades
+      const readyToCompletePool = activeInvestments.filter(inv => 
         inv.status === 'En route' && inv.expiresAt && inv.expiresAt <= now
       );
 
-      if (readyToComplete.length > 0 && !isProcessing) {
+      if (readyToCompletePool.length > 0 && !isProcessing) {
         setIsProcessing(true);
         try {
+          // Process in chunks of 150 to stay under 500 op limit (2 ops per inv + 1 profile update = 301 ops)
+          const readyToComplete = readyToCompletePool.slice(0, 150);
           const batch = writeBatch(db);
           const completions: any[] = [];
+          let totalIncrement = 0;
 
           for (const inv of readyToComplete) {
-            const profitAmount = Math.floor(inv.amount * (1 + (inv.profit || 0) / 100));
+            const profitTotal = Math.floor(inv.amount * (1 + (inv.profit || 0) / 100));
+            totalIncrement += profitTotal;
             
             // Update investment
             batch.update(doc(db, 'investments', inv.id), {
               status: 'Completed',
-              updatedAt: serverTimestamp()
-            });
-
-            // Update user balance
-            batch.update(doc(db, 'users', user.uid), {
-              balance: increment(profitAmount),
               updatedAt: serverTimestamp()
             });
 
@@ -451,18 +467,24 @@ export default function App() {
               routeName: getRouteName(inv.routeId),
               amount: inv.amount,
               profitPercent: inv.profit,
-              profitDinars: profitAmount - inv.amount,
+              profitDinars: profitTotal - inv.amount,
               type: 'completion',
               timestamp: new Date().toISOString()
             });
 
             completions.push({
-              id: `${inv.id}-${Date.now()}`,
+              id: `${inv.id}-${Date.now()}-${inv.id.substring(0,4)}`,
               name: getRouteName(inv.routeId),
-              profit: profitAmount - inv.amount,
+              profit: profitTotal - inv.amount,
               amount: inv.amount
             });
           }
+
+          // Single aggregate update for user balance (Avoids "500 field transforms" error)
+          batch.update(doc(db, 'users', user.uid), {
+            balance: increment(totalIncrement),
+            updatedAt: serverTimestamp()
+          });
 
           await batch.commit();
           
@@ -470,7 +492,6 @@ export default function App() {
             updateQuestProgress('trade', completions.length);
           }
           
-          {/* Removed auto-hide to keep them in notification center */}
           setPersistentNotifications(prev => [...prev, ...completions]);
           
         } catch (err) {
@@ -678,33 +699,28 @@ export default function App() {
     }
   };
 
-  const handlePurchase = async (item: { id: string, name: string, price: number, type?: string, category?: string }) => {
+  const handlePurchase = async (item: { id: string, name: string, price: number, type?: string, category?: string }, quantity: number = 1) => {
     if (!profile || !user || isProcessing) return;
 
     const isVerified = await ensureAuthenticated();
     if (!isVerified) return;
 
-    const CAPS: Record<string, number> = {
-      'nomad-tent': 8000, // Using nomad-tent as simple house for now
-      'merchant-loft': 1000,
-      'oasis-inn': 500, // Using oasis-inn as villa
-      'royal-castle': 500
-    };
-
     const currentCount = globalStats?.[item.id] || 0;
     const cap = CAPS[item.id] || 999999;
 
-    if (currentCount >= cap) {
+    if (currentCount + quantity > cap) {
       setNotification({ 
         type: 'error', 
         message: lang === 'ar' 
-          ? 'نفدت جميع الوحدات المتاحة! ابحث عنها في السوق الثانوي.' 
-          : 'All units sold out! Look for them in the secondary market.' 
+          ? 'المخزون غير كافٍ للكمية المطلوبة!' 
+          : 'Stock insufficient for requested quantity!' 
       });
       return;
     }
 
-    if (profile.balance >= item.price) {
+    const totalCost = item.price * quantity;
+
+    if (profile.balance >= totalCost) {
       if (item.id === 'royal-castle' && !isConvoyLeader) {
         setNotification({ 
           type: 'error', 
@@ -719,26 +735,28 @@ export default function App() {
       try {
         const batch = writeBatch(db);
         
-        const propertyRef = doc(collection(db, 'properties'));
-        batch.set(propertyRef, {
-          ownerId: user.uid,
-          itemId: item.id,
-          name: item.name,
-          type: item.type || 'house',
-          category: item.category || 'General',
-          price: item.price,
-          purchasedAt: serverTimestamp(),
-          lastRentCollectedAt: serverTimestamp()
-        });
+        for (let i = 0; i < quantity; i++) {
+          const propertyRef = doc(collection(db, 'properties'));
+          batch.set(propertyRef, {
+            ownerId: user.uid,
+            itemId: item.id,
+            name: item.name,
+            type: item.type || 'house',
+            category: item.category || 'General',
+            price: item.price,
+            purchasedAt: serverTimestamp(),
+            lastRentCollectedAt: serverTimestamp()
+          });
+        }
 
         batch.update(doc(db, 'users', user.uid), {
-          balance: increment(-item.price),
+          balance: increment(-totalCost),
           updatedAt: serverTimestamp()
         });
 
         // Update global count
         batch.update(doc(db, 'globalState', 'propertyStats'), {
-          [item.id]: increment(1)
+          [item.id]: increment(quantity)
         });
 
         // Log purchase
@@ -747,13 +765,14 @@ export default function App() {
           userId: user.uid,
           userName: profile.name,
           routeName: item.name,
-          amount: item.price,
+          amount: totalCost,
+          quantity: quantity,
           type: 'purchase',
           timestamp: new Date().toISOString()
         });
 
         await batch.commit();
-        setNotification({ type: 'success', message: lang === 'ar' ? `تم امتلاك ${item.name} بنجاح!` : `${item.name} acquired successfully!` });
+        setNotification({ type: 'success', message: lang === 'ar' ? `تم امتلاك ${quantity > 1 ? quantity + ' وحدات من' : ''} ${item.name} بنجاح!` : `${quantity > 1 ? quantity + ' units of ' : ''}${item.name} acquired successfully!` });
       } catch (err) {
         handleFirestoreError(err, OperationType.WRITE, 'properties');
       } finally {
@@ -764,15 +783,19 @@ export default function App() {
     }
   };
 
-  const handleSellProperty = async (propId: string, itemId: string, name: string, marketValue: number) => {
-    if (!profile || !user || isProcessing) return;
+  const handleSellProperty = async (propIds: string[], itemId: string, name: string, marketValue: number) => {
+    if (!profile || !user || isProcessing || propIds.length === 0) return;
     
-    const sellPrice = Math.floor(marketValue * 0.9);
+    const quantity = propIds.length;
+    const sellPrice = Math.floor(marketValue * 0.9 * quantity);
     
     setIsProcessing(true);
     try {
       const batch = writeBatch(db);
-      batch.delete(doc(db, 'properties', propId));
+      propIds.forEach(id => {
+        batch.delete(doc(db, 'properties', id));
+      });
+      
       batch.update(doc(db, 'users', user.uid), {
         balance: increment(sellPrice),
         updatedAt: serverTimestamp()
@@ -780,7 +803,7 @@ export default function App() {
 
       // Update global count (it returns to the bank)
       batch.update(doc(db, 'globalState', 'propertyStats'), {
-        [itemId]: increment(-1)
+        [itemId]: increment(-quantity)
       });
 
       // Log the sale
@@ -788,14 +811,14 @@ export default function App() {
       batch.set(logRef, {
         userId: user.uid,
         userName: profile.name,
-        routeName: name,
+        routeName: quantity > 1 ? `${name} x${quantity}` : name,
         amount: sellPrice,
         type: 'sell',
         timestamp: new Date().toISOString()
       });
 
       await batch.commit();
-      setNotification({ type: 'success', message: lang === 'ar' ? `تم بيع ${name} بنجاح` : `Sold ${name} successfully` });
+      setNotification({ type: 'success', message: lang === 'ar' ? `تم بيع ${quantity > 1 ? quantity + ' وحدات' : name} بنجاح` : `Sold ${quantity > 1 ? quantity + ' units' : name} successfully` });
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, 'properties');
     } finally {
@@ -803,22 +826,28 @@ export default function App() {
     }
   };
 
-  const handleCollectRent = async (propId: string, name: string, marketValue: number, currentRent: number, isAuto: boolean = false) => {
-    if (!profile || !user || isProcessing || currentRent <= 0) return;
+  const handleCollectRent = async (propId: string | string[], name: string, marketValue: number, totalRent: number, isAuto: boolean = false) => {
+    if (!profile || !user || isProcessing || totalRent <= 0) return;
 
     if (!isAuto) {
       const isVerified = await ensureAuthenticated();
       if (!isVerified) return;
       setIsProcessing(true);
     }
+    
     try {
       const batch = writeBatch(db);
-      batch.update(doc(db, 'properties', propId), {
-        lastRentCollectedAt: serverTimestamp()
+      const propIds = Array.isArray(propId) ? propId : [propId];
+      
+      propIds.forEach(id => {
+        batch.update(doc(db, 'properties', id), {
+          lastRentCollectedAt: serverTimestamp()
+        });
       });
+
       batch.update(doc(db, 'users', user.uid), {
-        balance: increment(currentRent),
-        rentCollectionsCount: increment(1),
+        balance: increment(totalRent),
+        rentCollectionsCount: increment(propIds.length),
         updatedAt: serverTimestamp()
       });
 
@@ -827,21 +856,20 @@ export default function App() {
       batch.set(logRef, {
         userId: user.uid,
         userName: profile.name,
-        routeName: `${name} (${isAuto ? 'Auto Rent' : 'Rent'})`,
-        amount: currentRent,
+        routeName: `${name} (${isAuto ? 'Auto' : ''} Rent${propIds.length > 1 ? ' x' + propIds.length : ''})`,
+        amount: totalRent,
         type: 'rent',
         timestamp: new Date().toISOString()
       });
 
       await batch.commit();
       if (!isAuto) {
-        setNotification({ type: 'success', message: lang === 'ar' ? `تم تحصيل إيجار ${currentRent} ${t.currency}` : `Collected ${currentRent} ${t.currency} rent` });
+        setNotification({ type: 'success', message: lang === 'ar' ? `تم تحصيل إيجار ${totalRent} ${t.currency}` : `Collected ${totalRent} ${t.currency} rent` });
       }
     } catch (err) {
       if (!isAuto) handleFirestoreError(err, OperationType.UPDATE, 'properties');
     } finally {
-      // Small cooldown to prevent rapid multi-clicks
-      setTimeout(() => setIsProcessing(false), 500);
+      if (!isAuto) setIsProcessing(false);
     }
   };
 
@@ -910,8 +938,47 @@ export default function App() {
   ];
 
   const earnedAchievements = profile ? ACHIEVEMENTS.filter(a => a.check(profile, properties, tradeLogs)) : [];
-  const totalAssetValue = properties.reduce((acc, p) => acc + (p.price || 0), 0);
-  const netWorth = (profile?.balance || 0) + totalAssetValue;
+
+  const groupedActiveConvoys = useMemo(() => {
+    const groups: Record<string, any> = {};
+    activeInvestments
+      .filter(i => i.status === 'En route')
+      .forEach(inv => {
+        if (!groups[inv.routeId]) {
+          groups[inv.routeId] = {
+            routeId: inv.routeId,
+            count: 0,
+            totalAmount: 0,
+            totalProfit: 0,
+            nextMaturing: inv,
+            status: inv.status,
+          };
+        }
+        groups[inv.routeId].count++;
+        groups[inv.routeId].totalAmount += inv.amount;
+        groups[inv.routeId].totalProfit += Math.floor(inv.amount * (inv.profit / 100));
+        
+        if (inv.expiresAt < groups[inv.routeId].nextMaturing.expiresAt) {
+          groups[inv.routeId].nextMaturing = inv;
+        }
+      });
+    return Object.values(groups);
+  }, [activeInvestments]);
+
+  const groupedNotifications = useMemo(() => {
+    const groups: Record<string, any> = {};
+    persistentNotifications.forEach(notif => {
+      const key = notif.type === 'rent' ? `rent-${notif.id}` : `convoy-${notif.name}`;
+      if (!groups[key]) {
+        groups[key] = { ...notif, count: 1, originalIds: [notif.id] };
+      } else {
+        groups[key].profit += notif.profit;
+        groups[key].count += 1;
+        groups[key].originalIds.push(notif.id);
+      }
+    });
+    return Object.values(groups);
+  }, [persistentNotifications]);
 
   const handleReset = async () => {
     if (!user) return;
@@ -957,6 +1024,15 @@ export default function App() {
     return lastDate.getDate() !== now.getDate() || lastDate.getMonth() !== now.getMonth() || lastDate.getFullYear() !== now.getFullYear();
   };
 
+  const isToday = (dateStr: string) => {
+    if (!dateStr) return false;
+    const d = new Date(dateStr);
+    const now = new Date();
+    return d.getDate() === now.getDate() && 
+           d.getMonth() === now.getMonth() && 
+           d.getFullYear() === now.getFullYear();
+  };
+
   const getTimestampMills = (ts: any) => {
     if (!ts) return Date.now();
     if (typeof ts.toMillis === 'function') return ts.toMillis();
@@ -966,21 +1042,47 @@ export default function App() {
     return Date.now();
   };
 
-  const BazaarItemCard = ({ item, ownedInstance }: { item: any; ownedInstance?: any; key?: any }) => {
-    const isOwned = !!ownedInstance;
+  // Synchronize Quests reactively
+  useEffect(() => {
+    if (!profile || !user || localQuests.length === 0) return;
     
-    // Rent calculation
-    const lastCollected = isOwned ? getTimestampMills(ownedInstance.lastRentCollectedAt || ownedInstance.purchasedAt) : 0;
-    const hoursElapsed = isOwned ? (currentTime - lastCollected) / (1000 * 60 * 60) : 0;
-    const rentableHours = Math.floor(hoursElapsed);
-    const currentRent = rentableHours * Math.floor((item.price || 0) * 0.05);
+    let hasChanged = false;
+    const updatedQuests = localQuests.map(q => {
+      let current = q.current;
+      if (q.id === 'q1') { // trades
+        const todayLogs = tradeLogs.filter(l => l.type === 'invest' && isToday(l.timestamp));
+        current = todayLogs.length;
+      } else if (q.id === 'q2') { // wealth
+        current = profile.balance;
+      } else if (q.id === 'q3') { // property
+        current = properties.length;
+      }
+      
+      const completed = current >= q.target;
+      const claimable = completed && q.status !== 'claimed';
+      
+      if (current !== q.current || completed !== q.completed || claimable !== q.claimable) {
+        hasChanged = true;
+        return { ...q, current, completed, claimable };
+      }
+      return q;
+    });
 
-    const CAPS: Record<string, number> = {
-      'nomad-tent': 8000,
-      'merchant-loft': 1000,
-      'oasis-inn': 500,
-      'royal-castle': 500
-    };
+    if (hasChanged) {
+      setLocalQuests(updatedQuests);
+    }
+  }, [profile?.balance, properties.length, tradeLogs, localQuests.length]);
+
+  const BazaarItemCard = ({ item, ownedInstances = [] }: { item: any; ownedInstances?: any[]; key?: any }) => {
+    const isOwned = ownedInstances.length > 0;
+    
+    // Rent calculation for all owned instances
+    const currentRent = ownedInstances.reduce((acc, inst) => {
+      const lastCollected = getTimestampMills(inst.lastRentCollectedAt || inst.purchasedAt);
+      const hoursElapsed = (currentTime - lastCollected) / (1000 * 60 * 60);
+      const rentableHours = Math.floor(hoursElapsed);
+      return acc + (rentableHours * Math.floor((item.price || 0) * 0.01));
+    }, 0);
 
     const currentCount = globalStats?.[item.id] || 0;
     const cap = CAPS[item.id];
@@ -988,9 +1090,9 @@ export default function App() {
     const isLocked = item.id === 'royal-castle' && !isConvoyLeader;
 
     const propertyMap: Record<string, { en: string, ar: string }> = {
-      'oasis-inn': { en: 'Oasis Inn', ar: 'نزل الواحة' },
+      'oasis-inn': { en: 'Grand Villa', ar: 'فيلا فخمة' },
       'merchant-loft': { en: 'Merchant Loft', ar: 'نزل التاجر' },
-      'nomad-tent': { en: 'Nomad Tent', ar: 'خيمة الرحالة' },
+      'nomad-tent': { en: 'Simple House', ar: 'منزل بسيط' },
       'red-sea-dhow': { en: 'Red Sea Dhow', ar: 'سفينة البحر الأحمر' },
       'desert-caravan': { en: 'Desert Caravan', ar: 'قافلة الصحراء' },
       'swift-camel': { en: 'Swift Camel', ar: 'ناقة سريعة' }
@@ -1000,13 +1102,13 @@ export default function App() {
       ? propertyMap[item.id][lang] 
       : item.name;
 
-    const lockExplanation = isLocked ? t.requiresLeader : null;
+    const maxBuyable = cap !== undefined ? Math.max(0, cap - currentCount) : 999;
 
     return (
       <div className={cn(
-        "glass-panel p-4 sm:p-6 rounded-[24px] sm:rounded-3xl border transition-all group shadow-sm flex flex-col h-full",
-        darkMode ? "bg-black/40 border-gold-900/30 text-gold-50" : "bg-white/90 border-gold-200 text-gray-900",
-        isOwned ? (darkMode ? "border-green-900/50" : "border-green-100 ring-1 ring-green-100/50") : ""
+        "glass-panel p-4 sm:p-6 flex flex-col h-full group transition-all duration-300",
+        darkMode ? "text-gold-50" : "text-gray-900",
+        isOwned ? (darkMode ? "border-green-600/50 shadow-[0_0_15px_rgba(34,197,94,0.1)]" : "border-green-300 shadow-[0_0_15px_rgba(34,197,94,0.1)]") : ""
       )}>
         <div className="flex justify-between items-start mb-3 sm:mb-4">
           <div className="flex items-center gap-3">
@@ -1042,8 +1144,9 @@ export default function App() {
             </div>
           </div>
           {isOwned && (
-            <div className="bg-green-100 text-green-700 text-[8px] font-black uppercase px-2 py-1 rounded-full tracking-wider animate-pulse">
-              {t.owned}
+            <div className="bg-green-100 text-green-700 text-[8px] font-black uppercase px-2 py-1 rounded-full tracking-wider animate-pulse flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+              {lang === 'ar' ? `تمتلك ${ownedInstances.length}` : `Owned ${ownedInstances.length}`}
             </div>
           )}
           {isSoldOut && !isOwned && (
@@ -1056,66 +1159,90 @@ export default function App() {
         <p className="text-sm text-gray-500 mb-6 flex-1">{item.desc}</p>
         
         <div className="space-y-4 pt-4 border-t border-gold-100/50">
-          {!isOwned ? (
+          <div className={cn("flex flex-col gap-4")}>
             <div className={cn("flex items-center justify-between", lang === 'ar' ? "flex-row-reverse" : "")}>
               <div className={lang === 'ar' ? "text-right" : "text-left"}>
                 <span className="text-[10px] text-gray-400 font-bold uppercase block mb-0.5">{lang === 'ar' ? 'السعر' : 'Price'}</span>
-                <span className="font-bold text-gold-700 text-xl">{item.price} {t.currency}</span>
+                <span className="font-bold text-gold-700 text-xl">{item.price.toLocaleString()} {t.currency}</span>
               </div>
+            </div>
+
+            {!isOwned ? (
               <button 
-                onClick={() => handlePurchase(item)}
-                disabled={isSoldOut || isLocked}
+                onClick={() => {
+                  setModalQuantity(1);
+                  setConfirmingAssetPurchase({ item, initialQuantity: 1 });
+                }}
+                disabled={isSoldOut || isLocked || isProcessing}
                 className={cn(
-                  "px-6 py-3 rounded-xl text-sm font-bold shadow-lg transition-all transform active:scale-95",
-                  isSoldOut || isLocked ? "bg-gray-300 text-gray-500 cursor-not-allowed" : (
+                  "w-full py-3 rounded-xl text-sm font-bold shadow-lg transition-all transform active:scale-95 flex items-center justify-center gap-2",
+                  isSoldOut || isLocked || isProcessing ? "bg-gray-300 text-gray-500 cursor-not-allowed" : (
                     item.type === 'ship' 
                       ? "bg-gold-900 text-gold-100 hover:bg-black" 
                       : "bg-gold-500 text-gold-950 hover:bg-gold-400"
                   )
                 )}
               >
-                {isLocked ? t.locked : isSoldOut ? (lang === 'ar' ? 'مبيوع' : 'Sold') : (item.type === 'house' ? t.rent : t.buy)}
+                {isLocked ? t.locked : isSoldOut ? (lang === 'ar' ? 'مبيوع' : 'Sold') : (
+                  <>
+                    <span>{lang === 'ar' ? 'شراء' : 'Buy Now'}</span>
+                  </>
+                )}
               </button>
-            </div>
-          ) : (
-            <>
-              <div className={cn("flex items-center justify-between", lang === 'ar' ? "flex-row-reverse" : "")}>
-                <div className={lang === 'ar' ? "text-right" : "text-left"}>
-                  <span className="text-[10px] text-green-600 font-bold uppercase block mb-0.5">{lang === 'ar' ? 'الإيجار المتراكم' : 'Accumulated Rent'}</span>
-                  <span className="font-black text-green-600 text-xl">+{currentRent} {t.currency}</span>
+            ) : (
+              <div className="space-y-3">
+                <div className={cn("flex items-center justify-between", lang === 'ar' ? "flex-row-reverse" : "")}>
+                  <div className={lang === 'ar' ? "text-right" : "text-left"}>
+                    <p className="text-[10px] text-green-600 font-bold uppercase">{lang === 'ar' ? 'إجمالي الإيجار' : 'Total Rent'}</p>
+                    <p className="font-black text-green-600 text-lg">+{currentRent.toLocaleString()} {t.currency}</p>
+                  </div>
+                  <button
+                    onClick={() => {
+                        const instancesToCollect = ownedInstances.filter(inst => {
+                            const lastColl = getTimestampMills(inst.lastRentCollectedAt || inst.purchasedAt);
+                            return Math.floor((currentTime - lastColl) / 3600000) > 0;
+                        });
+                        if (instancesToCollect.length > 0) {
+                            const totalToCollect = instancesToCollect.reduce((acc, inst) => {
+                                const lastColl = getTimestampMills(inst.lastRentCollectedAt || inst.purchasedAt);
+                                const hrs = Math.floor((currentTime - lastColl) / 3600000);
+                                return acc + (hrs * Math.floor(item.price * 0.05));
+                            }, 0);
+                            handleCollectRent(instancesToCollect.map(i => i.id), localizedName, item.price, totalToCollect);
+                        }
+                    }}
+                    disabled={currentRent <= 0 || isProcessing}
+                    className="px-4 py-2 bg-green-600 text-white rounded-xl text-[10px] font-bold hover:bg-green-700 disabled:opacity-30 transition-all shadow-md active:scale-95"
+                  >
+                    {lang === 'ar' ? 'تحصيل الكل' : 'Collect All'}
+                  </button>
                 </div>
-                <div className={lang === 'ar' ? "text-left" : "text-right"}>
-                  <span className="text-[10px] text-gray-400 font-bold uppercase block mb-0.5">{lang === 'ar' ? 'قيمة الأصول' : 'Asset Value'}</span>
-                  <span className="font-bold text-gray-600 text-sm">{item.price} {t.currency}</span>
+                
+                <div className="flex gap-2">
+                  <button 
+                    onClick={() => {
+                      setModalQuantity(1);
+                      setConfirmingAssetPurchase({ item, initialQuantity: 1 });
+                    }}
+                    disabled={isSoldOut || isLocked || isProcessing || (profile.balance < item.price)}
+                    className="flex-1 py-3 bg-gold-100 text-gold-700 border border-gold-200 rounded-xl text-xs font-bold hover:bg-gold-200 transition-all active:scale-95"
+                  >
+                    {lang === 'ar' ? `شراء إضافي` : `Buy More`}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setModalQuantity(1);
+                      setConfirmingSell({ ownedInstances, itemId: item.id, name: localizedName, price: item.price });
+                    }}
+                    disabled={isProcessing}
+                    className="flex-1 py-3 border border-red-200 text-red-500 rounded-xl text-xs font-bold hover:bg-red-50 transition-all active:scale-95"
+                  >
+                    {lang === 'ar' ? 'بيع' : 'Sell'}
+                  </button>
                 </div>
               </div>
-              
-              <div className="flex gap-2">
-                <button
-                  onClick={() => handleCollectRent(ownedInstance.id, localizedName, item.price, currentRent)}
-                  disabled={rentableHours < 1 || isProcessing}
-                  className="flex-1 py-3 bg-green-600 text-white rounded-xl text-xs font-bold hover:bg-green-700 disabled:opacity-30 transition-all shadow-md active:scale-95"
-                >
-                  {lang === 'ar' ? 'تحصيل الإيجار' : 'Collect Rent'}
-                </button>
-                <button
-                  onClick={() => setConfirmingSell({ id: ownedInstance.id, itemId: item.id, name: localizedName, price: item.price })}
-                  disabled={isProcessing}
-                  className="px-4 py-3 border border-red-200 text-red-500 rounded-xl text-xs font-bold hover:bg-red-50 transition-all active:scale-95"
-                >
-                  {lang === 'ar' ? 'بيع' : 'Sell'}
-                </button>
-              </div>
-
-              {rentableHours < 1 && (
-                <p className="text-[10px] text-gray-400 italic text-center">
-                  {lang === 'ar' 
-                    ? `يتوفر الإيجار القادم خلال ${Math.ceil(60 - (hoursElapsed % 1) * 60)} دقيقة` 
-                    : `Next rent available in ${Math.ceil(60 - (hoursElapsed % 1) * 60)} mins`}
-                </p>
-              )}
-            </>
-          )}
+            )}
+          </div>
         </div>
       </div>
     );
@@ -1144,7 +1271,7 @@ export default function App() {
   return (
     <div className={cn(
       "flex h-screen w-full overflow-hidden font-sans relative transition-colors duration-500",
-      darkMode ? "bg-[#1a1410] text-gold-50" : "bg-parchment text-gray-900",
+      darkMode ? "dark bg-[#1a1410] text-gold-50" : "bg-parchment text-gray-900",
       lang === 'ar' ? "flex-row-reverse text-right" : ""
     )} dir={lang === 'ar' ? 'rtl' : 'ltr'}>
       <Sidebar 
@@ -1239,12 +1366,12 @@ export default function App() {
                         )}
                       </div>
                       <div className="py-2 space-y-1">
-                        {persistentNotifications.length === 0 ? (
+                        {groupedNotifications.length === 0 ? (
                           <div className="p-8 text-center text-gray-400 italic text-sm">
                             {lang === 'ar' ? 'لا توجد تنبيهات جديدة' : 'No new notifications'}
                           </div>
                         ) : (
-                          persistentNotifications.map(notif => (
+                          groupedNotifications.map(notif => (
                             <div
                               key={notif.id}
                               className={cn(
@@ -1253,11 +1380,18 @@ export default function App() {
                               )}
                             >
                               <div className="flex items-center gap-3">
-                                <div className={cn(
-                                  "w-10 h-10 rounded-full flex items-center justify-center shrink-0",
-                                  notif.type === 'rent' ? "bg-blue-500/20 text-blue-500" : "bg-green-500/20 text-green-500"
-                                )}>
-                                  {notif.type === 'rent' ? <Landmark size={20} /> : <TrendingUp size={20} />}
+                                <div className="relative">
+                                  <div className={cn(
+                                    "w-10 h-10 rounded-full flex items-center justify-center shrink-0",
+                                    notif.type === 'rent' ? "bg-blue-500/20 text-blue-500" : "bg-green-500/20 text-green-500"
+                                  )}>
+                                    {notif.type === 'rent' ? <Landmark size={20} /> : <TrendingUp size={20} />}
+                                  </div>
+                                  {notif.count > 1 && (
+                                    <div className="absolute -top-1 -right-1 bg-gold-600 text-white w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-black border border-white shadow-sm z-10">
+                                      {notif.count}
+                                    </div>
+                                  )}
                                 </div>
                                 <div className="min-w-0">
                                   <h5 className={cn(
@@ -1266,21 +1400,25 @@ export default function App() {
                                   )}>
                                     {notif.type === 'rent' 
                                       ? (lang === 'ar' ? `إيجار متاح: ${notif.name}` : `Rent available: ${notif.name}`)
-                                      : (lang === 'ar' ? `وصلت قافلة ${notif.name}!` : `Convoy ${notif.name} arrived!`)}
+                                      : (lang === 'ar' ? `${notif.count > 1 ? `(${notif.count}) ` : ''}وصلت قوافل ${notif.name}!` : `${notif.count > 1 ? `(${notif.count}) ` : ''}Convoy ${notif.name} groups arrived!`)}
                                   </h5>
                                   <p className={cn(
                                     "text-[10px] font-bold mt-0.5",
                                     notif.type === 'rent' ? "text-blue-500" : "text-green-500"
                                   )}>
-                                    {notif.profit} {t.currency} {notif.type === 'rent' ? (lang === 'ar' ? 'إيجار' : 'rent') : (lang === 'ar' ? 'ربح' : 'profit')}
+                                    {notif.profit.toLocaleString()} {t.currency} {notif.type === 'rent' ? (lang === 'ar' ? 'إيجار' : 'rent') : (lang === 'ar' ? 'ربح' : 'profit')}
                                   </p>
                                 </div>
                               </div>
                               <button 
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setPersistentNotifications(prev => prev.filter(n => n.id !== notif.id));
-                                  setDismissedNotifications(prev => new Set(prev).add(notif.id));
+                                  setPersistentNotifications(prev => prev.filter(n => !notif.originalIds.includes(n.id)));
+                                  setDismissedNotifications(prev => {
+                                    const next = new Set(prev);
+                                    notif.originalIds.forEach((id: string) => next.add(id));
+                                    return next;
+                                  });
                                 }}
                                 className="p-1.5 opacity-0 group-hover:opacity-100 transition-all text-gray-400 hover:text-red-500"
                               >
@@ -1359,6 +1497,216 @@ export default function App() {
 
         {/* Global Modals */}
         <AnimatePresence>
+          {confirmingAssetPurchase && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+            >
+              <motion.div 
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                className={cn(
+                  "rounded-3xl p-8 max-w-sm w-full shadow-2xl border transition-colors",
+                  darkMode ? "bg-[#2d2118] border-gold-900 border-opacity-30 text-gold-50" : "bg-white border-gold-200 text-gray-900"
+                )}
+              >
+                <div className="w-16 h-16 bg-gold-500/10 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-gold-500/20">
+                   <Home size={32} className="text-gold-500" />
+                </div>
+
+                <h3 className={cn(
+                  "font-serif font-bold text-2xl mb-2 text-center",
+                  darkMode ? "text-gold-200" : "text-gray-900"
+                )}>
+                  {lang === 'ar' ? 'تأكيد الشراء' : 'Confirm Purchase'}
+                </h3>
+                
+                <p className="text-center text-sm text-gray-500 mb-6 px-4">
+                  {lang === 'ar' 
+                    ? `هل ترغب في شراء ${modalQuantity} من ${confirmingAssetPurchase.item.name}؟`
+                    : `Do you wish to acquire ${modalQuantity} units of ${confirmingAssetPurchase.item.name}?`}
+                </p>
+
+                <div className="space-y-4 py-4 border-y border-gold-100/50 mb-6">
+                    <div className="flex justify-between items-center px-2">
+                       <span className={cn("text-[10px] font-black uppercase tracking-widest", darkMode ? "text-gold-400/60" : "text-gray-400")}>
+                        {lang === 'ar' ? 'الكمية' : 'Quantity'}
+                      </span>
+                      <div className="flex items-center gap-2 bg-gold-50 p-1 rounded-xl border border-gold-100">
+                        <button 
+                          className="w-8 h-8 flex items-center justify-center bg-white rounded-lg shadow-sm font-bold text-gold-700 hover:bg-gold-100 active:scale-90 transition-all select-none"
+                          onClick={() => setModalQuantity(q => Math.max(1, q - 1))}
+                          disabled={isProcessing}
+                        >
+                          -
+                        </button>
+                        <span className="font-bold text-sm min-w-[1.5rem] text-center">{modalQuantity}</span>
+                        <button 
+                          className="w-8 h-8 flex items-center justify-center bg-white rounded-lg shadow-sm font-bold text-gold-700 hover:bg-gold-100 active:scale-90 transition-all select-none"
+                          onClick={() => {
+                            const currentCount = globalStats?.[confirmingAssetPurchase.item.id] || 0;
+                            const cap = CAPS[confirmingAssetPurchase.item.id];
+                            const maxBuyable = cap !== undefined ? Math.max(0, cap - currentCount) : 999;
+                            const isLocked = confirmingAssetPurchase.item.id === 'royal-castle' && netWorth < 250000;
+                            const max = isLocked ? 1 : maxBuyable;
+                            setModalQuantity(q => q < max ? q + 1 : q);
+                          }}
+                          disabled={isProcessing}
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex justify-between items-center px-2">
+                      <span className={cn("text-[10px] font-black uppercase tracking-widest", darkMode ? "text-gold-400/60" : "text-gray-400")}>
+                        {lang === 'ar' ? 'سعر الوحدة' : 'Unit Price'}
+                      </span>
+                      <span className="font-bold text-sm">{confirmingAssetPurchase.item.price.toLocaleString()} {t.currency}</span>
+                    </div>
+                    <div className={cn(
+                      "p-4 rounded-2xl border flex items-center justify-between",
+                      darkMode ? "bg-black/40 border-gold-900/50" : "bg-gold-50 border-gold-100"
+                    )}>
+                      <span className={cn("font-bold text-sm tracking-tight text-gold-600")}>
+                        {lang === 'ar' ? 'الإجمالي' : 'Total Cost'}
+                      </span>
+                      <span className={cn("font-black text-xl text-gold-600")}>
+                        {(confirmingAssetPurchase.item.price * modalQuantity).toLocaleString()} {t.currency}
+                      </span>
+                    </div>
+                </div>
+
+                <div className="flex gap-3">
+                  <button 
+                    onClick={() => setConfirmingAssetPurchase(null)}
+                    className={cn(
+                      "flex-1 py-4 font-bold transition-colors",
+                      darkMode ? "text-gold-400 hover:text-gold-300" : "text-gray-500 hover:text-gray-700"
+                    )}
+                  >
+                    {t.cancel}
+                  </button>
+                  <button 
+                    onClick={() => {
+                      handlePurchase(confirmingAssetPurchase.item, modalQuantity);
+                      setConfirmingAssetPurchase(null);
+                    }}
+                    disabled={isProcessing || (profile.balance < confirmingAssetPurchase.item.price * modalQuantity)}
+                    className="flex-1 py-4 bg-gold-600 text-white font-bold rounded-2xl hover:bg-gold-700 transition-all shadow-lg disabled:bg-gray-400"
+                  >
+                    {isProcessing ? (lang === 'ar' ? 'جاري...' : 'Loading...') : (lang === 'ar' ? 'تأكيد' : 'Confirm')}
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+
+          {confirmingSell && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+            >
+              <motion.div 
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                className={cn(
+                  "rounded-3xl p-8 max-w-sm w-full shadow-2xl border transition-colors",
+                  darkMode ? "bg-[#2d2118] border-gold-900 border-opacity-30 text-gold-50" : "bg-white border-gold-200 text-gray-900"
+                )}
+              >
+                <h3 className={cn(
+                  "font-serif font-bold text-2xl mb-2 border-b pb-4",
+                  darkMode ? "text-gold-200 border-gold-900/30" : "text-gray-900 border-gold-100"
+                )}>
+                  {lang === 'ar' ? 'تأكيد البيع' : 'Confirm Sale'}
+                </h3>
+                <div className="space-y-4 py-6">
+                    <div className="flex justify-between items-center">
+                       <span className={cn("text-sm font-medium", darkMode ? "text-gold-400/60" : "text-gray-500")}>
+                        {lang === 'ar' ? 'الأصل' : 'Asset'}
+                      </span>
+                      <span className="font-bold text-lg">{confirmingSell.name}</span>
+                    </div>
+
+                    <div className="flex justify-between items-center">
+                       <span className={cn("text-sm font-medium", darkMode ? "text-gold-400/60" : "text-gray-500")}>
+                        {lang === 'ar' ? 'الكمية' : 'Quantity'}
+                      </span>
+                      <div className="flex items-center gap-2 bg-gold-50 p-1 rounded-xl border border-gold-100">
+                        <button 
+                          className="w-8 h-8 flex items-center justify-center bg-white rounded-lg shadow-sm font-bold text-gold-700 hover:bg-gold-100 active:scale-90 transition-all select-none"
+                          onClick={() => setModalQuantity(q => Math.max(1, q - 1))}
+                          disabled={isProcessing}
+                        >
+                          -
+                        </button>
+                        <span className="font-bold text-sm min-w-[1.5rem] text-center">{modalQuantity}</span>
+                        <button 
+                          className="w-8 h-8 flex items-center justify-center bg-white rounded-lg shadow-sm font-bold text-gold-700 hover:bg-gold-100 active:scale-90 transition-all select-none"
+                          onClick={() => {
+                            const max = confirmingSell.ownedInstances.length;
+                            setModalQuantity(q => q < max ? q + 1 : q);
+                          }}
+                          disabled={isProcessing}
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex justify-between items-center">
+                       <span className={cn("text-sm font-medium", darkMode ? "text-gold-400/60" : "text-gray-500")}>
+                        {lang === 'ar' ? 'قيمة السوق' : 'Market Value'}
+                      </span>
+                      <span className="font-bold text-lg">{(confirmingSell.price || 0).toLocaleString()} {t.currency}</span>
+                    </div>
+                    <div className={cn(
+                      "p-4 rounded-2xl border flex items-center justify-between",
+                      darkMode ? "bg-black/40 border-gold-900/50" : "bg-gold-50 border-gold-100"
+                    )}>
+                      <span className={cn("font-bold text-sm tracking-tight text-gold-600")}>
+                        {lang === 'ar' ? 'سوف تستلم' : 'You will receive'}
+                      </span>
+                      <span className={cn("font-black text-xl text-gold-600")}>
+                        {Math.floor((confirmingSell.price || 0) * 0.9 * modalQuantity).toLocaleString()} {t.currency}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-gray-400 text-center uppercase tracking-widest">
+                      {lang === 'ar' ? 'رسوم السوق 10% مخصومة' : '10% market fee deducted'}
+                    </p>
+                </div>
+                <div className="flex gap-3">
+                  <button 
+                    onClick={() => setConfirmingSell(null)}
+                    className={cn(
+                      "flex-1 py-4 font-bold transition-colors",
+                      darkMode ? "text-gold-400 hover:text-gold-300" : "text-gray-500 hover:text-gray-700"
+                    )}
+                  >
+                    {t.cancel}
+                  </button>
+                  <button 
+                    onClick={() => {
+                      const idsToSell = confirmingSell.ownedInstances.slice(0, modalQuantity).map(i => i.id);
+                      handleSellProperty(idsToSell, confirmingSell.itemId, confirmingSell.name, confirmingSell.price);
+                      setConfirmingSell(null);
+                    }}
+                    disabled={isProcessing}
+                    className="flex-1 py-4 bg-gold-600 text-white font-bold rounded-2xl hover:bg-gold-700 transition-all shadow-lg disabled:bg-gray-400"
+                  >
+                    {isProcessing ? (lang === 'ar' ? 'جاري التحميل...' : 'Loading...') : (lang === 'ar' ? 'تأكيد البيع' : 'Confirm Sale')}
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+
           {showRaidNotification && (
             <motion.div 
               initial={{ opacity: 0, scale: 0.9 }}
@@ -1367,7 +1715,6 @@ export default function App() {
               className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md"
             >
               <div className="bg-[#2d2118] border-2 border-red-900 rounded-[40px] p-8 max-w-sm w-full text-center shadow-2xl relative overflow-hidden">
-                {/* Visual blood-like splatter or sand storm overlay */}
                 <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'radial-gradient(circle at 50% 50%, #7f1d1d, transparent)' }} />
                 
                 <div className="w-20 h-20 bg-red-900/30 rounded-full flex items-center justify-center mx-auto mb-6 border border-red-500/30">
@@ -1379,14 +1726,14 @@ export default function App() {
                 </h3>
                 <p className="text-red-200/70 text-sm mb-6 leading-relaxed">
                   {lang === 'ar' 
-                    ? `بينما كنت بعيداً عن حراسة قافلتك، هاجم اللصوص خزائنك واستولوا على ${showRaidNotification.loss} دينار.` 
-                    : `While your treasury was unguarded, desert bandits raided your vaults and made off with ${showRaidNotification.loss} Dinars.`}
+                    ? `بينما كنت بعيداً عن حراسة قافلتك، هاجم اللصوص خزائنك واستولوا على ${showRaidNotification.loss.toLocaleString()} دينار.` 
+                    : `While your treasury was unguarded, desert bandits raided your vaults and made off with ${showRaidNotification.loss.toLocaleString()} Dinars.`}
                 </p>
                 
                 <div className="bg-black/40 rounded-2xl p-4 mb-8 border border-white/5">
                    <div className="flex justify-between items-center text-[10px] font-black uppercase text-gray-500 tracking-widest mb-1">
                       <span>{lang === 'ar' ? 'الخسارة' : 'LosS'}</span>
-                      <span className="text-red-500">-{showRaidNotification.loss} {t.currency}</span>
+                      <span className="text-red-500">-{showRaidNotification.loss.toLocaleString()} {t.currency}</span>
                    </div>
                    <div className="h-1 bg-gray-800 rounded-full overflow-hidden">
                       <motion.div initial={{ width: 0 }} animate={{ width: '100%' }} className="h-full bg-red-600" />
@@ -1402,90 +1749,6 @@ export default function App() {
               </div>
             </motion.div>
           )}
-        </AnimatePresence>
-        <AnimatePresence>
-          {confirmingSell && (
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
-            >
-              <motion.div 
-                initial={{ scale: 0.9, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.9, opacity: 0 }}
-                className={cn(
-                  "rounded-3xl p-8 max-w-sm w-full shadow-2xl border transition-colors",
-                  darkMode ? "bg-red-950/90 border-red-900 text-red-50" : "bg-white border-red-100 text-gray-900"
-                )}
-              >
-                <h3 className={cn(
-                  "font-serif font-bold text-2xl mb-2 border-b pb-4",
-                  darkMode ? "text-red-200 border-red-800" : "text-gray-900 border-red-50"
-                )}>
-                  {lang === 'ar' ? 'تأكيد البيع' : 'Confirm Sale'}
-                </h3>
-                <div className="space-y-4 py-6">
-                    <div className="flex justify-between items-center">
-                      <span className={cn("text-sm font-medium", darkMode ? "text-red-300/60" : "text-gray-500")}>
-                        {lang === 'ar' ? 'الأصل' : 'Asset'}
-                      </span>
-                      <span className="font-bold text-lg">{confirmingSell.name}</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className={cn("text-sm font-medium", darkMode ? "text-red-300/60" : "text-gray-500")}>
-                        {lang === 'ar' ? 'قيمة السوق' : 'Market Value'}
-                      </span>
-                      <span className="font-bold text-lg">{confirmingSell.price} {t.currency}</span>
-                    </div>
-                    <div className={cn(
-                      "p-4 rounded-2xl border flex items-center justify-between",
-                      darkMode ? "bg-black/40 border-red-900" : "bg-red-50 border-red-100"
-                    )}>
-                      <span className={cn("font-bold text-sm tracking-tight text-red-600")}>
-                        {lang === 'ar' ? 'سوف تستلم' : 'You will receive'}
-                      </span>
-                      <span className={cn("font-black text-xl text-red-600")}>
-                        {Math.floor(confirmingSell.price * 0.9)} {t.currency}
-                      </span>
-                    </div>
-                    <p className="text-[10px] text-gray-400 text-center uppercase tracking-widest">
-                      {lang === 'ar' ? 'رسوم السوق 10% مخصومة' : '10% market fee deducted'}
-                    </p>
-                    <div className="p-3 bg-red-100/50 border border-red-200 rounded-xl flex items-center gap-2">
-                      <AlertCircle size={14} className="text-red-600 shrink-0" />
-                      <p className="text-[10px] text-red-700 font-bold leading-tight">
-                        {lang === 'ar' 
-                          ? 'تنبيه: ستفقد القدرة على تحصيل الإيجار من هذا العقار فور اتمام البيع.' 
-                          : 'Warning: You will lose the ability to collect rent from this property immediately upon sale.'}
-                      </p>
-                    </div>
-                </div>
-                <div className="flex gap-3">
-                  <button 
-                    onClick={() => setConfirmingSell(null)}
-                    className={cn(
-                      "flex-1 py-4 font-bold transition-colors",
-                      darkMode ? "text-red-400 hover:text-red-300" : "text-gray-500 hover:text-gray-700"
-                    )}
-                  >
-                    {t.cancel}
-                  </button>
-                  <button 
-                    onClick={() => {
-                      handleSellProperty(confirmingSell.id, confirmingSell.itemId, confirmingSell.name, confirmingSell.price);
-                      setConfirmingSell(null);
-                    }}
-                    disabled={isProcessing}
-                    className="flex-1 py-4 bg-red-600 text-white font-bold rounded-2xl hover:bg-red-700 transition-all shadow-lg disabled:bg-gray-400"
-                  >
-                    {isProcessing ? (lang === 'ar' ? 'جاري التحميل...' : 'Loading...') : (lang === 'ar' ? 'تأكيد البيع' : 'Confirm Sale')}
-                  </button>
-                </div>
-              </motion.div>
-            </motion.div>
-          )}
 
           {confirmingTrade && (
             <motion.div 
@@ -1499,7 +1762,7 @@ export default function App() {
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.9, opacity: 0 }}
                 className={cn(
-                  "rounded-3xl p-8 max-sm w-full shadow-2xl border transition-colors",
+                  "rounded-3xl p-8 max-w-sm w-full shadow-2xl border transition-colors",
                   darkMode ? "bg-gold-900/90 border-gold-700 text-gold-50" : "bg-white border-gold-200 text-gray-900"
                 )}
               >
@@ -1551,7 +1814,7 @@ export default function App() {
                    </div>
                    <div className="flex justify-between items-center">
                      <span className={cn("text-sm font-medium", darkMode ? "text-gold-400" : "text-gray-500")}>{t.entry}</span>
-                     <span className="font-bold text-lg">{confirmingTrade.cost * tradeQuantity} {t.currency}</span>
+                     <span className="font-bold text-lg">{(confirmingTrade.cost * tradeQuantity).toLocaleString()} {t.currency}</span>
                    </div>
                    <div className="flex justify-between items-center">
                      <span className={cn("text-sm font-medium", darkMode ? "text-gold-400" : "text-gray-500")}>{lang === 'ar' ? 'المدة' : 'Duration'}</span>
@@ -1604,6 +1867,7 @@ export default function App() {
                 <TradeMap 
                   lang={lang} 
                   activeStormRoute={activeStormRoute}
+                  darkMode={darkMode}
                   onPinClick={(id) => {
                   const routes = [
                     { id: 'silk-road', name: t.silkRoad, cost: 1000, profit: 10, duration: 1, minRank: 0 },
@@ -1661,7 +1925,7 @@ export default function App() {
                         }}
                         className={cn(
                           "w-36 md:w-48 p-2 md:p-2.5 rounded-[20px] border backdrop-blur-md shadow-lg transition-all pointer-events-auto relative",
-                          darkMode ? "bg-black/30 border-gold-900/10" : route.color,
+                          darkMode ? "bg-black/20 border-gold-900/40" : route.color,
                           lang === 'ar' ? "text-right" : "text-left",
                           isStormWarning ? "ring-2 ring-amber-500/40" : "",
                           isStormBonus ? "ring-2 ring-green-500/40" : ""
@@ -1693,7 +1957,7 @@ export default function App() {
                               "w-6 h-6 md:w-8 md:h-8 rounded-full flex items-center justify-center shrink-0 shadow-inner",
                               route.id === 'silk-road' ? "bg-red-500/10 text-red-600" : route.id === 'amber-road' ? "bg-amber-500/10 text-amber-600" : "bg-blue-500/10 text-blue-600"
                             )}>
-                               <Ship size={12} className="md:w-5 md:h-5" />
+                               {getRouteIcon(route.id, 14)}
                             </div>
                             <div className="min-w-0">
                               <h4 className={cn("font-serif font-black text-[10px] md:text-sm leading-none truncate", darkMode ? "text-gold-100" : "text-gray-900")}>{route.name}</h4>
@@ -1713,7 +1977,7 @@ export default function App() {
                           "flex items-center justify-between mt-1 pt-1 border-t border-black/5",
                           lang === 'ar' ? "flex-row-reverse" : ""
                         )}>
-                          <p className="text-[8px] md:text-[10px] text-gray-500 font-bold">{route.cost} {t.currency}</p>
+                          <p className="text-[8px] md:text-[10px] text-gray-500 font-bold">{(route.cost || 0).toLocaleString()} {t.currency}</p>
                           <div className="flex items-center gap-1 opacity-60">
                             <TrendingUp size={8} />
                             <span className="text-[7px] md:text-[9px] font-black uppercase">
@@ -1760,41 +2024,54 @@ export default function App() {
                         <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
                         {t.activeInvestments}
                       </h4>
-                      {activeInvestments.filter(i => i.status === 'En route').length === 0 ? (
-                        <div className="glass-panel p-10 rounded-3xl border border-dashed border-gold-300 text-center text-gold-600/50 italic">
+                      {groupedActiveConvoys.length === 0 ? (
+                        <div className="glass-panel p-10 rounded-3xl border-dashed border-gold-300/50 text-center text-gold-600/50 italic">
                           {t.noInvestments}
                         </div>
                       ) : (
-                        activeInvestments.filter(i => i.status === 'En route').map((inv) => {
+                        groupedActiveConvoys.map((group) => {
+                          const inv = group.nextMaturing;
                           const duration = inv.expiresAt - (inv.startTime || inv.createdAt?.toMillis() || Date.now());
                           const remaining = Math.max(0, inv.expiresAt - currentTime);
                           const progress = Math.min(100, Math.floor(((duration - remaining) / duration) * 100));
                           
                           return (
-                            <div key={inv.id} className={cn(
-                              "glass-panel p-5 rounded-3xl border transition-all hover:border-gold-400 group bg-white shadow-sm",
-                              darkMode ? "bg-black/20 border-gold-900/40" : "border-gold-100",
+                            <div key={group.routeId} className={cn(
+                              "glass-panel p-5 rounded-3xl group",
                               lang === 'ar' ? "text-right" : "text-left"
                             )}>
                               <div className={cn("flex items-center justify-between mb-4", lang === 'ar' ? "flex-row-reverse" : "")}>
                                 <div className={cn("flex items-center gap-4", lang === 'ar' ? "flex-row-reverse" : "")}>
-                                  <div className="w-12 h-12 rounded-2xl bg-gold-100/50 flex items-center justify-center text-gold-700 shrink-0 group-hover:scale-110 transition-transform">
-                                    <Ship size={24} />
+                                  <div className="relative">
+                                    <div className="w-12 h-12 rounded-2xl bg-gold-100/50 flex items-center justify-center text-gold-700 shrink-0 group-hover:scale-110 transition-transform">
+                                      {getRouteIcon(group.routeId, 24)}
+                                    </div>
+                                    {group.count > 1 && (
+                                      <div className="absolute -top-2 -right-2 bg-gold-600 text-white w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black border-2 border-white shadow-lg z-10">
+                                        {group.count}
+                                      </div>
+                                    )}
                                   </div>
                                   <div>
-                                    <p className="font-serif font-bold text-lg text-gray-800">{getRouteName(inv.routeId)}</p>
+                                    <p className="font-serif font-bold text-lg text-gray-800">
+                                      {getRouteName(group.routeId)}
+                                      {group.count > 1 && <span className="opacity-50 mx-2">x{group.count}</span>}
+                                    </p>
                                     <p className="text-[10px] text-blue-600 font-black uppercase tracking-widest">{t.enRoute}</p>
                                   </div>
                                 </div>
                                 <div className={lang === 'ar' ? "text-left" : "text-right"}>
-                                  <p className="font-bold text-gold-800 text-lg">{inv.amount} {t.currency}</p>
-                                  <p className="text-xs font-black text-green-600">+{inv.profit}% {lang === 'ar' ? 'ربح متوقع' : 'Expected Profit'}</p>
+                                 <p className="font-bold text-gold-800 text-lg">{(group.totalAmount).toLocaleString()} {t.currency}</p>
+                                  <p className="text-xs font-black text-green-600">
+                                    +{(group.totalProfit).toLocaleString()} {t.currency} 
+                                    <span className="text-[9px] opacity-60 ml-1">({lang === 'ar' ? 'إجمالي الربح بالدينار' : 'Total profit in Dinars'})</span>
+                                  </p>
                                 </div>
                               </div>
 
                               <div className="space-y-1.5">
                                 <div className="flex justify-between items-center text-[10px] uppercase font-black tracking-widest text-gold-600">
-                                  <span>{lang === 'ar' ? 'التقدم' : 'Progress'}</span>
+                                  <span>{lang === 'ar' ? 'التقدم (الوصول التالي)' : 'Progress (Next Arrival)'}</span>
                                   <span>{progress}%</span>
                                 </div>
                                 <div className="h-2 w-full bg-gold-100/30 rounded-full overflow-hidden">
@@ -1807,8 +2084,11 @@ export default function App() {
                                 </div>
                                 <div className={cn("flex items-center justify-between mt-2", lang === 'ar' ? "flex-row-reverse" : "")}>
                                   <span className="text-[9px] text-gray-400">
-                                    {lang === 'ar' ? 'الوقت المتبقي: ' : 'Time remaining: '}
+                                    {lang === 'ar' ? 'الوصول التالي خلال: ' : 'Next arrival in: '}
                                     {Math.ceil(remaining / 60000)} {Math.ceil(remaining / 60000) === 1 ? t.minute : t.minutes}
+                                  </span>
+                                  <span className="text-[9px] text-gold-500 font-black">
+                                    {lang === 'ar' ? `إجمالي القوافل النشطة: ${group.count}` : `Total Active: ${group.count}`}
                                   </span>
                                 </div>
                               </div>
@@ -1834,8 +2114,7 @@ export default function App() {
                             .sort((a, b) => (b.updatedAt?.toMillis() || 0) - (a.updatedAt?.toMillis() || 0))
                             .slice(0, 10).map((inv) => (
                             <div key={inv.id} className={cn(
-                              "glass-panel p-4 rounded-2xl border bg-white/60 flex items-center justify-between",
-                              darkMode ? "bg-black/10 border-gold-900/20" : "border-gold-100",
+                              "glass-panel p-4 rounded-2xl flex items-center justify-between",
                               lang === 'ar' ? "flex-row-reverse" : ""
                             )}>
                               <div className={cn("flex items-center gap-3", lang === 'ar' ? "flex-row-reverse" : "")}>
@@ -1848,7 +2127,7 @@ export default function App() {
                                 </div>
                               </div>
                               <div className={lang === 'ar' ? "text-left" : "text-right"}>
-                                <p className="font-black text-green-600 text-sm">+{Math.floor(inv.amount * (inv.profit/100))} {t.currency}</p>
+                                <p className="font-black text-green-600 text-sm">+{Math.floor(inv.amount * (inv.profit/100)).toLocaleString()} {t.currency}</p>
                                 <p className="text-[9px] text-gray-400 font-bold uppercase">{t.completed}</p>
                               </div>
                             </div>
@@ -1888,16 +2167,16 @@ export default function App() {
                     return 0;
                   }).map((q) => (
                     <div key={q.id} className={cn(
-                      "glass-panel p-4 sm:p-6 rounded-[24px] sm:rounded-[32px] border relative overflow-hidden transition-all",
-                      q.status === 'claimed' ? "opacity-60 bg-gray-50 border-gray-100" : (darkMode ? "bg-black/20 border-gold-900/30" : "bg-white border-gold-200")
+                      "glass-panel p-4 sm:p-6 relative overflow-hidden transition-all",
+                      q.status === 'claimed' ? "opacity-60 grayscale" : ""
                     )}>
                       <div className="flex justify-between items-start mb-4">
                         <div className="flex items-center gap-3 sm:gap-4">
                            <div className={cn(
-                             "w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 border",
-                             q.completed ? "bg-green-100 text-green-600 border-green-200" : "bg-gold-50 text-gold-600 border-gold-200"
+                             "w-10 h-10 sm:w-12 sm:h-12 flex items-center justify-center shrink-0",
+                             q.completed ? "text-green-500" : (darkMode ? "bg-gold-950/40 border border-gold-900/30 text-gold-400" : "bg-gold-50 border border-gold-200 text-gold-600")
                            )}>
-                             {q.completed ? <CheckCircle2 size={20} className="sm:w-6 sm:h-6" /> : (q.type === 'trade' ? <Ship size={20} className="sm:w-6 sm:h-6" /> : q.type === 'wealth' ? <Coins size={20} className="sm:w-6 sm:h-6" /> : <Home size={20} className="sm:w-6 sm:h-6" />)}
+                             {q.completed ? <CheckCircle2 size={24} className="sm:w-8 sm:h-8" /> : (q.type === 'trade' ? <Ship size={20} className="sm:w-6 sm:h-6" /> : q.type === 'wealth' ? <Coins size={20} className="sm:w-6 sm:h-6" /> : <Home size={20} className="sm:w-6 sm:h-6" />)}
                            </div>
                            <div className="min-w-0">
                              <h4 className="font-serif font-bold text-base sm:text-lg truncate">{q.title}</h4>
@@ -1907,7 +2186,7 @@ export default function App() {
                         
                         <div className="text-right shrink-0">
                            <span className="text-[9px] sm:text-[10px] font-black uppercase text-gray-400 block mb-0.5">{lang === 'ar' ? 'المكافأة' : 'Reward'}</span>
-                           <span className="font-black text-base sm:text-xl text-gold-600">+{q.reward} <span className="text-[10px] sm:text-xs">{t.currency}</span></span>
+                           <span className="font-black text-base sm:text-xl text-gold-600">+{(q.reward).toLocaleString()} <span className="text-[10px] sm:text-xs">{t.currency}</span></span>
                         </div>
                       </div>
 
@@ -1976,8 +2255,7 @@ export default function App() {
                   {myClan ? (
                     <div className="space-y-6">
                       <div className={cn(
-                        "glass-panel p-6 sm:p-10 rounded-[48px] border relative overflow-hidden",
-                        darkMode ? "bg-amber-950/20 border-amber-900/50" : "bg-white border-amber-200"
+                        "glass-panel p-6 sm:p-10 rounded-[48px] relative overflow-hidden"
                       )}>
                          <div className="absolute top-0 right-0 p-8 opacity-5">
                             <Crown size={120} />
@@ -1989,7 +2267,7 @@ export default function App() {
                                <div className="flex gap-6">
                                   <div>
                                      <p className="text-[10px] font-black uppercase text-gray-400 tracking-widest">{lang === 'ar' ? 'الأعضاء' : 'Members'}</p>
-                                     <p className="font-bold text-xl">{myClan.members}</p>
+                                     <p className="font-bold text-xl">{(myClan.members || 0).toLocaleString()}</p>
                                   </div>
                                   <div>
                                      <p className="text-[10px] font-black uppercase text-gray-400 tracking-widest">{lang === 'ar' ? 'ثروة النقابة' : 'Clan Wealth'}</p>
@@ -1999,14 +2277,20 @@ export default function App() {
                             </div>
                             
                             <div className="flex flex-col justify-center gap-3">
-                               <div className="p-4 bg-green-50 rounded-2xl border border-green-100 flex items-center gap-3">
-                                  <div className="w-10 h-10 bg-green-500 text-white rounded-xl flex items-center justify-center">
-                                     <CheckCircle2 size={24} />
-                                  </div>
-                                  <div>
-                                     <p className="text-[10px] font-black uppercase text-green-600 tracking-widest">{lang === 'ar' ? 'حماية مفعلة' : 'Immunity Active'}</p>
-                                     <p className="text-xs text-green-700 font-bold">{lang === 'ar' ? 'أنت محمي من غارات اللصوص' : 'Safe from bandit raids'}</p>
-                                  </div>
+                               <div className={cn(
+                                 "p-4 rounded-2xl border flex items-center gap-3 transition-colors",
+                                 darkMode ? "bg-green-950/20 border-green-900/30" : "bg-green-50 border-green-100"
+                               )}>
+                                 <div className="text-green-500">
+                                    <CheckCircle2 size={24} />
+                                 </div>
+                                 <div>
+                                    <p className="text-[10px] font-black uppercase text-green-600 tracking-widest">{lang === 'ar' ? 'حماية مفعلة' : 'Immunity Active'}</p>
+                                    <p className={cn(
+                                      "text-xs font-bold",
+                                      darkMode ? "text-green-400" : "text-green-700"
+                                    )}>{lang === 'ar' ? 'أنت محمي من غارات اللصوص' : 'Safe from bandit raids'}</p>
+                                 </div>
                                </div>
                                <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100 flex items-center gap-3">
                                   <div className="w-10 h-10 bg-blue-500 text-white rounded-xl flex items-center justify-center">
@@ -2022,10 +2306,7 @@ export default function App() {
                       </div>
 
                       {/* Clan Expedition - Added detail */}
-                      <div className={cn(
-                        "p-6 rounded-[32px] border-2 border-dashed border-gold-300",
-                        darkMode ? "bg-black/20" : "bg-gold-50/30"
-                      )}>
+                      <div className="glass-panel p-6">
                         <div className="flex items-center justify-between mb-4">
                           <div className="flex items-center gap-3">
                             <Ship className="text-gold-600" />
@@ -2054,7 +2335,10 @@ export default function App() {
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
                        {isCreatingClan ? (
-                         <div className="glass-panel p-8 rounded-[40px] border border-gold-400 flex flex-col items-center text-center justify-center bg-gold-50/30 col-span-1 md:col-span-2">
+                         <div className={cn(
+                           "glass-panel p-8 rounded-[40px] border flex flex-col items-center text-center justify-center col-span-1 md:col-span-2",
+                           darkMode ? "bg-black/20 border-gold-900/40" : "border-gold-400 bg-gold-50/30"
+                         )}>
                             <h4 className="font-serif font-black text-xl text-gold-700 mb-4">{lang === 'ar' ? 'تأسيس نقابة جديدة' : 'Establish New Clan'}</h4>
                             <input 
                               type="text"
@@ -2086,7 +2370,10 @@ export default function App() {
                          </div>
                        ) : (
                          <>
-                           <div className="glass-panel p-8 rounded-[40px] border border-dashed border-gray-300 flex flex-col items-center text-center justify-center bg-gray-50/50">
+                           <div className={cn(
+                             "glass-panel p-8 rounded-[40px] border border-dashed flex flex-col items-center text-center justify-center",
+                             darkMode ? "bg-black/20 border-gold-900/40" : "border-gray-300 bg-gray-50/50"
+                           )}>
                               <h4 className="font-bold mb-2">{lang === 'ar' ? 'أسس نقابتك الخاصة' : 'Form Your Own Clan'}</h4>
                               <p className="text-xs text-gray-500 mb-6">{lang === 'ar' ? 'يكلف التأسيس 50,000 دينار' : 'Foundation costs 50,000 Dinars'}</p>
                               <button 
@@ -2097,7 +2384,10 @@ export default function App() {
                               </button>
                            </div>
                            
-                           <div className="glass-panel p-8 rounded-[40px] border border-amber-200 bg-amber-50/20 flex flex-col items-center text-center justify-center">
+                           <div className={cn(
+                             "glass-panel p-8 rounded-[40px] border flex flex-col items-center text-center justify-center",
+                             darkMode ? "bg-black/20 border-gold-900/40" : "border-amber-200 bg-amber-50/20"
+                           )}>
                               <h4 className="font-bold mb-2">{lang === 'ar' ? 'انضم لنقابة موجودة' : 'Join an Existing Clan'}</h4>
                               <p className="text-xs text-gray-500 mb-6">{lang === 'ar' ? 'اختر من القائمة أدناه' : 'Select from the leaderboard below'}</p>
                               <div className="animate-bounce">
@@ -2117,8 +2407,7 @@ export default function App() {
                      <div className="space-y-3">
                         {clans.map((c, idx) => (
                           <div key={c.id} className={cn(
-                            "glass-panel p-4 sm:p-6 rounded-3xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 group hover:border-amber-400 transition-all",
-                            darkMode ? "bg-black/20 border-gold-900/20" : "bg-white border-gold-100",
+                            "glass-panel p-4 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 group hover:border-amber-400 transition-all",
                             profile?.clanId === c.id ? "border-amber-400 ring-2 ring-amber-400/20" : ""
                           )}>
                              <div className="flex items-center gap-4 sm:gap-6">
@@ -2126,7 +2415,7 @@ export default function App() {
                                 <div className="min-w-0">
                                    <h5 className="font-bold text-base sm:text-lg truncate">{c.name}</h5>
                                    <p className="text-[9px] sm:text-[10px] font-black uppercase text-gray-400 tracking-widest truncate">
-                                      {c.members} {lang === 'ar' ? 'أعضاء' : 'Members'} • {c.leaderName}
+                                      {(c.members || 0).toLocaleString()} {lang === 'ar' ? 'أعضاء' : 'Members'} • {c.leaderName}
                                    </p>
                                 </div>
                              </div>
@@ -2192,8 +2481,8 @@ export default function App() {
                         { id: 'nomad-tent', name: lang === 'ar' ? 'منزل بسيط' : 'Simple House', price: 5000, desc: lang === 'ar' ? 'سكن متواضع للمبتدئين' : 'Starter home for new traders', type: 'house', category: lang === 'ar' ? 'تكلفة منخفضة' : 'Low Cost' },
                         { id: 'royal-castle', name: lang === 'ar' ? 'قصر ملكي' : 'Royal Castle', price: 1000000, desc: lang === 'ar' ? 'أقصى درجات الفخامة والمكانة' : 'Maximum prestige and rent', type: 'house', category: lang === 'ar' ? 'نادر جداً' : 'Ultra Rare' }
                       ].map((item, idx) => {
-                        const ownedInstance = properties.find(p => p.itemId === item.id);
-                        return <BazaarItemCard key={idx} item={item} ownedInstance={ownedInstance} />;
+                        const ownedInstances = properties.filter(p => p.itemId === item.id);
+                        return <BazaarItemCard key={idx} item={item} ownedInstances={ownedInstances} />;
                       })}
                     </div>
                   </section>
@@ -2209,32 +2498,38 @@ export default function App() {
                         { id: 'desert-caravan', name: lang === 'ar' ? 'قافلة الصحراء' : 'Desert Caravan', price: 12000, desc: lang === 'ar' ? 'ناقلة بضائع ضخمة' : 'Massive goods transporter', type: 'caravan', category: lang === 'ar' ? 'صناعي' : 'Industrial' },
                         { id: 'swift-camel', name: lang === 'ar' ? 'ناقة سريعة' : 'Swift Camel', price: 1200, desc: lang === 'ar' ? 'حيوان توصيل سريع' : 'Quick delivery animal', type: 'caravan', category: lang === 'ar' ? 'أساسي' : 'Basic' }
                       ].map((item, idx) => {
-                        const ownedInstance = properties.find(p => p.itemId === item.id);
-                        return <BazaarItemCard key={idx} item={item} ownedInstance={ownedInstance} />;
+                        const ownedInstances = properties.filter(p => p.itemId === item.id);
+                        return <BazaarItemCard key={idx} item={item} ownedInstances={ownedInstances} />;
                       })}
                     </div>
                   </section>
 
                   {/* Any other properties not matched in standard list */}
-                  {properties.filter(p => !['oasis-inn', 'merchant-loft', 'nomad-tent', 'red-sea-dhow', 'desert-caravan', 'swift-camel'].includes(p.itemId || '')).length > 0 && (
+                  {properties.filter(p => !['oasis-inn', 'merchant-loft', 'nomad-tent', 'red-sea-dhow', 'desert-caravan', 'swift-camel', 'royal-castle'].includes(p.itemId || '')).length > 0 && (
                     <section>
                       <div className={cn("flex items-center gap-3 mb-6", lang === 'ar' ? "flex-row-reverse" : "")}>
                         <Landmark className="text-gold-600" size={24} />
                         <h3 className="font-display text-2xl text-gold-800">{lang === 'ar' ? 'ممتلكات أخرى' : 'Other Assets'}</h3>
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 pb-12">
-                        {properties.filter(p => !['oasis-inn', 'merchant-loft', 'nomad-tent', 'red-sea-dhow', 'desert-caravan', 'swift-camel'].includes(p.itemId || '')).map((prop, idx) => (
+                        {/* Group other assets too */}
+                        {Object.entries(properties.filter(p => !['oasis-inn', 'merchant-loft', 'nomad-tent', 'red-sea-dhow', 'desert-caravan', 'swift-camel', 'royal-castle'].includes(p.itemId || '')).reduce((acc, p) => {
+                          const id = p.itemId || p.id;
+                          if (!acc[id]) acc[id] = [];
+                          acc[id].push(p);
+                          return acc;
+                        }, {} as Record<string, any[]>)).map(([id, instances], idx) => (
                           <BazaarItemCard 
-                            key={idx} 
+                            key={id} 
                             item={{ 
-                              id: prop.itemId || prop.id, 
-                              name: prop.name, 
-                              price: prop.price || 0,
+                              id: id, 
+                              name: (instances as any[])[0].name, 
+                              price: (instances as any[])[0].price || 0,
                               desc: lang === 'ar' ? 'ممتلكات خاصة' : 'Private Asset',
-                              type: prop.type || 'house',
-                              category: prop.category || 'Basic'
+                              type: (instances as any[])[0].type || 'house',
+                              category: (instances as any[])[0].category || 'Basic'
                             }} 
-                            ownedInstance={prop} 
+                            ownedInstances={instances as any[]} 
                           />
                         ))}
                       </div>
@@ -2255,10 +2550,7 @@ export default function App() {
                 <div className="max-w-5xl mx-auto space-y-6 sm:space-y-8 pb-20">
                   {/* Stats Overview */}
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
-                    <div className={cn(
-                      "glass-panel p-6 rounded-[24px] sm:rounded-[32px] border relative overflow-hidden",
-                      darkMode ? "bg-gold-900/10 border-gold-900/40" : "bg-white border-gold-100"
-                    )}>
+                    <div className="glass-panel p-6 relative overflow-hidden">
                       <div className="flex items-center gap-2 mb-3 sm:mb-4">
                         <Wallet size={14} className="text-gold-600 sm:w-4 sm:h-4" />
                         <span className="text-[9px] sm:text-[10px] font-black uppercase text-gold-600 tracking-widest">{t.totalWealth}</span>
@@ -2267,10 +2559,7 @@ export default function App() {
                       <p className="text-[9px] sm:text-[10px] text-gray-400 mt-2">{lang === 'ar' ? 'السيولة المتاحة' : 'Available Liquidity'}</p>
                     </div>
 
-                    <div className={cn(
-                      "glass-panel p-6 rounded-[24px] sm:rounded-[32px] border relative overflow-hidden",
-                      darkMode ? "bg-black/40 border-gold-900/20" : "bg-white border-gold-100"
-                    )}>
+                    <div className="glass-panel p-6 relative overflow-hidden">
                       <div className="flex items-center gap-2 mb-3 sm:mb-4">
                         <Home size={14} className="text-blue-600 sm:w-4 sm:h-4" />
                         <span className="text-[9px] sm:text-[10px] font-black uppercase text-blue-600 tracking-widest">{lang === 'ar' ? 'قيمة الأصول' : 'Asset Value'}</span>
@@ -2279,9 +2568,7 @@ export default function App() {
                       <p className="text-[9px] sm:text-[10px] text-gray-400 mt-2">{properties.length} {lang === 'ar' ? 'وحدات ممتلكة' : 'Units owned'}</p>
                     </div>
 
-                    <div className={cn(
-                      "glass-panel p-6 rounded-[24px] sm:rounded-[32px] border relative overflow-hidden bg-gradient-to-br from-gold-600 to-gold-800 text-white border-gold-500 shadow-xl shadow-gold-500/20"
-                    )}>
+                    <div className="glass-panel p-6 relative overflow-hidden bg-gradient-to-br from-gold-600 to-gold-800 text-white border-gold-500 shadow-xl shadow-gold-500/20">
                       <div className="flex items-center gap-2 mb-3 sm:mb-4">
                         <Crown size={14} className="text-gold-100 sm:w-4 sm:h-4" />
                         <span className="text-[9px] sm:text-[10px] font-black uppercase text-gold-100 tracking-widest">{lang === 'ar' ? 'صافي الثروة' : 'Net Worth'}</span>
@@ -2292,10 +2579,7 @@ export default function App() {
                   </div>
 
                   {/* Profile & Name Edit */}
-                  <div className={cn(
-                    "glass-panel p-8 rounded-[40px] border shadow-sm flex flex-col md:flex-row items-center justify-between gap-6",
-                    darkMode ? "border-gold-800 bg-gold-900/5" : "border-gold-100 bg-white"
-                  )}>
+                  <div className="glass-panel p-8 shadow-sm flex flex-col md:flex-row items-center justify-between gap-6">
                     <div className="flex items-center gap-6">
                       <div className={cn(
                         "w-20 h-20 rounded-3xl flex items-center justify-center border shadow-xl relative group",
@@ -2408,10 +2692,7 @@ export default function App() {
                   </div>
 
                   {/* Transaction History Relocated */}
-                  <div className={cn(
-                    "glass-panel rounded-3xl border p-8 shadow-sm transition-colors",
-                    darkMode ? "border-gold-800 bg-black/40" : "border-gold-200 bg-white/90"
-                  )}>
+                  <div className="glass-panel p-8 shadow-sm transition-colors">
                     <h4 className="font-display text-xl mb-6 text-gold-600 border-b border-gold-100/10 pb-4">
                       {lang === 'ar' ? 'سجل المعاملات الأخير' : 'Recent Transaction History'}
                     </h4>
@@ -2450,8 +2731,8 @@ export default function App() {
                                 "text-sm font-bold",
                                 log.type === 'completion' || log.type === 'rent' ? "text-green-500" : "text-gold-600"
                               )}>
-                                {log.type === 'completion' ? `+${log.profitDinars}` : 
-                                 log.type === 'rent' ? `+${log.amount}` : `-${log.amount}`} {t.currency}
+                                {log.type === 'completion' ? `+${(log.profitDinars || 0).toLocaleString()}` : 
+                                 log.type === 'rent' ? `+${(log.amount || 0).toLocaleString()}` : `-${(log.amount || 0).toLocaleString()}`} {t.currency}
                               </p>
                               <p className="text-[9px] uppercase font-black tracking-tighter opacity-50">
                                 {log.type}
