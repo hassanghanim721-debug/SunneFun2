@@ -42,13 +42,18 @@ export const BazaarItemCard: React.FC<BazaarItemCardProps> = memo(({
     return new Date(ts).getTime();
   };
 
-  // Rent calculation for all owned instances
-  const currentRent = ownedInstances.reduce((acc, inst) => {
-    const lastCollected = getTimestampMills(inst.lastRentCollectedAt || inst.purchasedAt);
-    const hoursElapsed = (currentTime - lastCollected) / (1000 * 60 * 60);
-    const rentableHours = Math.floor(hoursElapsed);
-    return acc + (rentableHours * Math.floor((item.price || 0) * 0.05));
-  }, 0);
+  // Rent calculation for all owned instances - Memoized by hour to save performance
+  const currentRent = React.useMemo(() => {
+    // Only recalculate if properties, item price, or the current hour changes
+    const currentHourTimestamp = Math.floor(currentTime / 3600000);
+    
+    return ownedInstances.reduce((acc, inst) => {
+      const lastCollected = getTimestampMills(inst.lastRentCollectedAt || inst.purchasedAt);
+      const hoursElapsed = (currentTime - lastCollected) / (1000 * 60 * 60);
+      const rentableHours = Math.floor(hoursElapsed);
+      return acc + (rentableHours * Math.floor((item.price || 0) * 0.05));
+    }, 0);
+  }, [ownedInstances, item.price, Math.floor(currentTime / 3600000)]);
 
   const currentCount = globalStats?.[item.id] || 0;
   const cap = CAPS[item.id];

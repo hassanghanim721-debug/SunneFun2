@@ -752,45 +752,57 @@ export default function App() {
 
       setIsProcessing(true);
       try {
-        const batch = writeBatch(db);
-        
-        for (let i = 0; i < quantity; i++) {
-          const propertyRef = doc(collection(db, 'properties'));
-          batch.set(propertyRef, {
-            ownerId: user.uid,
-            itemId: item.id,
-            name: item.name,
-            type: item.type || 'house',
-            category: item.category || 'General',
-            price: item.price,
-            purchasedAt: serverTimestamp(),
-            lastRentCollectedAt: serverTimestamp()
-          });
+        const chunks = [];
+        for (let i = 0; i < quantity; i += 450) {
+          chunks.push(i);
         }
 
-        batch.update(doc(db, 'users', user.uid), {
-          balance: increment(-totalCost),
-          updatedAt: serverTimestamp()
-        });
+        for (const startIndex of chunks) {
+          const batch = writeBatch(db);
+          const currentChunkSize = Math.min(450, quantity - startIndex);
+          
+          for (let i = 0; i < currentChunkSize; i++) {
+            const propertyRef = doc(collection(db, 'properties'));
+            batch.set(propertyRef, {
+              ownerId: user.uid,
+              itemId: item.id,
+              name: item.name,
+              type: item.type || 'house',
+              category: item.category || 'General',
+              price: item.price,
+              purchasedAt: serverTimestamp(),
+              lastRentCollectedAt: serverTimestamp()
+            });
+          }
 
-        // Update global count
-        batch.update(doc(db, 'globalState', 'propertyStats'), {
-          [item.id]: increment(quantity)
-        });
+          // Update user balance and global stats only in the first batch to be safe, 
+          // or we can split the balance update if we want more granular failures, 
+          // but atomic is better. Let's do balance in the LAST chunk.
+          if (startIndex + 450 >= quantity) {
+            batch.update(doc(db, 'users', user.uid), {
+              balance: increment(-totalCost),
+              updatedAt: serverTimestamp()
+            });
 
-        // Log purchase
-        const logRef = doc(collection(db, 'tradeLogs'));
-        batch.set(logRef, {
-          userId: user.uid,
-          userName: profile.name,
-          routeName: item.name,
-          amount: totalCost,
-          quantity: quantity,
-          type: 'purchase',
-          timestamp: new Date().toISOString()
-        });
+            batch.update(doc(db, 'globalState', 'propertyStats'), {
+              [item.id]: increment(quantity)
+            });
 
-        await batch.commit();
+            const logRef = doc(collection(db, 'tradeLogs'));
+            batch.set(logRef, {
+              userId: user.uid,
+              userName: profile.name,
+              routeName: item.name,
+              amount: totalCost,
+              quantity: quantity,
+              type: 'purchase',
+              timestamp: new Date().toISOString()
+            });
+          }
+
+          await batch.commit();
+        }
+        
         setNotification({ type: 'success', message: lang === 'ar' ? `تم امتلاك ${quantity > 1 ? quantity + ' وحدات من' : ''} ${item.name} بنجاح!` : `${quantity > 1 ? quantity + ' units of ' : ''}${item.name} acquired successfully!` });
       } catch (err) {
         handleFirestoreError(err, OperationType.WRITE, 'properties');
@@ -810,33 +822,37 @@ export default function App() {
     
     setIsProcessing(true);
     try {
-      const batch = writeBatch(db);
-      propIds.forEach(id => {
-        batch.delete(doc(db, 'properties', id));
-      });
-      
-      batch.update(doc(db, 'users', user.uid), {
-        balance: increment(sellPrice),
-        updatedAt: serverTimestamp()
-      });
+      const allIds = [...propIds];
+      for (let i = 0; i < allIds.length; i += 450) {
+        const chunk = allIds.slice(i, i + 450);
+        const batch = writeBatch(db);
+        
+        chunk.forEach(id => {
+          batch.delete(doc(db, 'properties', id));
+        });
 
-      // Update global count (it returns to the bank)
-      batch.update(doc(db, 'globalState', 'propertyStats'), {
-        [itemId]: increment(-quantity)
-      });
+        if (i + 450 >= allIds.length) {
+          batch.update(doc(db, 'users', user.uid), {
+            balance: increment(sellPrice),
+            updatedAt: serverTimestamp()
+          });
 
-      // Log the sale
-      const logRef = doc(collection(db, 'tradeLogs'));
-      batch.set(logRef, {
-        userId: user.uid,
-        userName: profile.name,
-        routeName: quantity > 1 ? `${name} x${quantity}` : name,
-        amount: sellPrice,
-        type: 'sell',
-        timestamp: new Date().toISOString()
-      });
+          batch.update(doc(db, 'globalState', 'propertyStats'), {
+            [itemId]: increment(-quantity)
+          });
 
-      await batch.commit();
+          const logRef = doc(collection(db, 'tradeLogs'));
+          batch.set(logRef, {
+            userId: user.uid,
+            userName: profile.name,
+            routeName: quantity > 1 ? `${name} x${quantity}` : name,
+            amount: sellPrice,
+            type: 'sell',
+            timestamp: new Date().toISOString()
+          });
+        }
+        await batch.commit();
+      }
       setNotification({ type: 'success', message: lang === 'ar' ? `تم بيع ${quantity > 1 ? quantity + ' وحدات' : name} بنجاح` : `Sold ${quantity > 1 ? quantity + ' units' : name} successfully` });
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, 'properties');
@@ -855,33 +871,39 @@ export default function App() {
     }
     
     try {
-      const batch = writeBatch(db);
       const propIds = Array.isArray(propId) ? propId : [propId];
       
-      propIds.forEach(id => {
-        batch.update(doc(db, 'properties', id), {
-          lastRentCollectedAt: serverTimestamp()
+      for (let i = 0; i < propIds.length; i += 450) {
+        const chunk = propIds.slice(i, i + 450);
+        const batch = writeBatch(db);
+        
+        chunk.forEach(id => {
+          batch.update(doc(db, 'properties', id), {
+            lastRentCollectedAt: serverTimestamp()
+          });
         });
-      });
 
-      batch.update(doc(db, 'users', user.uid), {
-        balance: increment(totalRent),
-        rentCollectionsCount: increment(propIds.length),
-        updatedAt: serverTimestamp()
-      });
+        // Update balance and log in final chunk
+        if (i + 450 >= propIds.length) {
+          batch.update(doc(db, 'users', user.uid), {
+            balance: increment(totalRent),
+            rentCollectionsCount: increment(propIds.length),
+            updatedAt: serverTimestamp()
+          });
 
-      // Log the rent
-      const logRef = doc(collection(db, 'tradeLogs'));
-      batch.set(logRef, {
-        userId: user.uid,
-        userName: profile.name,
-        routeName: `${name} (${isAuto ? 'Auto' : ''} Rent${propIds.length > 1 ? ' x' + propIds.length : ''})`,
-        amount: totalRent,
-        type: 'rent',
-        timestamp: new Date().toISOString()
-      });
+          const logRef = doc(collection(db, 'tradeLogs'));
+          batch.set(logRef, {
+            userId: user.uid,
+            userName: profile.name,
+            routeName: `${name} (${isAuto ? 'Auto' : ''} Rent${propIds.length > 1 ? ' x' + propIds.length : ''})`,
+            amount: totalRent,
+            type: 'rent',
+            timestamp: new Date().toISOString()
+          });
+        }
+        await batch.commit();
+      }
 
-      await batch.commit();
       if (!isAuto) {
         setNotification({ type: 'success', message: lang === 'ar' ? `تم تحصيل إيجار ${totalRent} ${t.currency}` : `Collected ${totalRent} ${t.currency} rent` });
       }
@@ -1092,8 +1114,19 @@ export default function App() {
     }
   }, [profile?.balance, properties.length, tradeLogs, localQuests.length]);
 
+  // Group properties by itemId for optimized rendering
+  const groupedProperties = useMemo(() => {
+    const groups: Record<string, any[]> = {};
+    properties.forEach(p => {
+      const id = p.itemId || 'legacy';
+      if (!groups[id]) groups[id] = [];
+      groups[id].push(p);
+    });
+    return groups;
+  }, [properties]);
+
   const renderBazaarItem = (item: any) => {
-    const ownedInstances = properties.filter(p => p.itemId === item.id);
+    const ownedInstances = groupedProperties[item.id] || [];
     return (
       <BazaarItemCard 
         key={item.id}
@@ -2346,66 +2379,51 @@ export default function App() {
                       <h3 className="font-display text-2xl text-gold-800">{t.estate}</h3>
                     </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6">
-                      {[
-                        { id: 'oasis-inn', name: lang === 'ar' ? 'فيلا فخمة' : 'Grand Villa', price: 150000, desc: lang === 'ar' ? 'فيلا فخمة بحدائق واسعة' : 'Palatial villa with gardens', type: 'house', category: lang === 'ar' ? 'هيبة عالية' : 'High Prestige' },
-                        { id: 'merchant-loft', name: lang === 'ar' ? 'نزل التاجر' : 'Merchant Loft', price: 25000, desc: lang === 'ar' ? 'مساحة مريحة قرب الأسواق' : 'Comfortable space near markets', type: 'house', category: lang === 'ar' ? 'تكلفة متوسطة' : 'Moderate Cost' },
-                        { id: 'nomad-tent', name: lang === 'ar' ? 'منزل بسيط' : 'Simple House', price: 5000, desc: lang === 'ar' ? 'سكن متواضع للمبتدئين' : 'Starter home for new traders', type: 'house', category: lang === 'ar' ? 'تكلفة منخفضة' : 'Low Cost' },
-                        { id: 'royal-castle', name: lang === 'ar' ? 'قصر ملكي' : 'Royal Castle', price: 1000000, desc: lang === 'ar' ? 'أقصى درجات الفخامة والمكانة' : 'Maximum prestige and rent', type: 'house', category: lang === 'ar' ? 'نادر جداً' : 'Ultra Rare' }
-                      ].map((item, idx) => {
-                        const ownedInstances = properties.filter(p => p.itemId === item.id);
-                        return <BazaarItemCard key={idx} item={item} ownedInstances={ownedInstances} />;
-                      })}
-                    </div>
-                  </section>
-
-                  <section>
-                    <div className={cn("flex items-center gap-3 mb-6", lang === 'ar' ? "flex-row-reverse" : "")}>
-                      <Ship className="text-gold-600" size={24} />
-                      <h3 className="font-display text-2xl text-gold-800">{t.vessels}</h3>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 pb-12">
-                      {[
-                        { id: 'red-sea-dhow', name: lang === 'ar' ? 'سفينة البحر الأحمر' : 'Red Sea Dhow', price: 8000, desc: lang === 'ar' ? 'سفينة تجارية سريعة' : 'Swift maritime trading ship', type: 'ship', category: lang === 'ar' ? 'نخبة' : 'Elite' },
-                        { id: 'desert-caravan', name: lang === 'ar' ? 'قافلة الصحراء' : 'Desert Caravan', price: 12000, desc: lang === 'ar' ? 'ناقلة بضائع ضخمة' : 'Massive goods transporter', type: 'caravan', category: lang === 'ar' ? 'صناعي' : 'Industrial' },
-                        { id: 'swift-camel', name: lang === 'ar' ? 'ناقة سريعة' : 'Swift Camel', price: 1200, desc: lang === 'ar' ? 'حيوان توصيل سريع' : 'Quick delivery animal', type: 'caravan', category: lang === 'ar' ? 'أساسي' : 'Basic' }
-                      ].map((item, idx) => {
-                        const ownedInstances = properties.filter(p => p.itemId === item.id);
-                        return <BazaarItemCard key={idx} item={item} ownedInstances={ownedInstances} />;
-                      })}
-                    </div>
-                  </section>
-
-                  {/* Any other properties not matched in standard list */}
-                  {properties.filter(p => !['oasis-inn', 'merchant-loft', 'nomad-tent', 'red-sea-dhow', 'desert-caravan', 'swift-camel', 'royal-castle'].includes(p.itemId || '')).length > 0 && (
-                    <section>
-                      <div className={cn("flex items-center gap-3 mb-6", lang === 'ar' ? "flex-row-reverse" : "")}>
-                        <Landmark className="text-gold-600" size={24} />
-                        <h3 className="font-display text-2xl text-gold-800">{lang === 'ar' ? 'ممتلكات أخرى' : 'Other Assets'}</h3>
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 pb-12">
-                        {/* Group other assets too */}
-                        {Object.entries(properties.filter(p => !['oasis-inn', 'merchant-loft', 'nomad-tent', 'red-sea-dhow', 'desert-caravan', 'swift-camel', 'royal-castle'].includes(p.itemId || '')).reduce((acc, p) => {
-                          const id = p.itemId || p.id;
-                          if (!acc[id]) acc[id] = [];
-                          acc[id].push(p);
-                          return acc;
-                        }, {} as Record<string, any[]>)).map(([id, instances], idx) => (
-                          <BazaarItemCard 
-                            key={id} 
-                            item={{ 
-                              id: id, 
-                              name: (instances as any[])[0].name, 
-                              price: (instances as any[])[0].price || 0,
-                              desc: lang === 'ar' ? 'ممتلكات خاصة' : 'Private Asset',
-                              type: (instances as any[])[0].type || 'house',
-                              category: (instances as any[])[0].category || 'Basic'
-                            }} 
-                            ownedInstances={instances as any[]} 
-                          />
-                        ))}
+                        {[
+                          { id: 'oasis-inn', name: lang === 'ar' ? 'فيلا فخمة' : 'Grand Villa', price: 150000, desc: lang === 'ar' ? 'فيلا فخمة بحدائق واسعة' : 'Palatial villa with gardens', type: 'house', category: lang === 'ar' ? 'هيبة عالية' : 'High Prestige' },
+                          { id: 'merchant-loft', name: lang === 'ar' ? 'نزل التاجر' : 'Merchant Loft', price: 25000, desc: lang === 'ar' ? 'مساحة مريحة قرب الأسواق' : 'Comfortable space near markets', type: 'house', category: lang === 'ar' ? 'تكلفة متوسطة' : 'Moderate Cost' },
+                          { id: 'nomad-tent', name: lang === 'ar' ? 'منزل بسيط' : 'Simple House', price: 5000, desc: lang === 'ar' ? 'سكن متواضع للمبتدئين' : 'Starter home for new traders', type: 'house', category: lang === 'ar' ? 'تكلفة منخفضة' : 'Low Cost' },
+                          { id: 'royal-castle', name: lang === 'ar' ? 'قصر ملكي' : 'Royal Castle', price: 1000000, desc: lang === 'ar' ? 'أقصى درجات الفخامة والمكانة' : 'Maximum prestige and rent', type: 'house', category: lang === 'ar' ? 'نادر جداً' : 'Ultra Rare' }
+                        ].map(item => renderBazaarItem(item))}
                       </div>
                     </section>
-                  )}
+
+                    <section>
+                      <div className={cn("flex items-center gap-3 mb-6", lang === 'ar' ? "flex-row-reverse" : "")}>
+                        <Ship className="text-gold-600" size={24} />
+                        <h3 className="font-display text-2xl text-gold-800">{t.vessels}</h3>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 pb-12">
+                        {[
+                          { id: 'red-sea-dhow', name: lang === 'ar' ? 'سفينة البحر الأحمر' : 'Red Sea Dhow', price: 8000, desc: lang === 'ar' ? 'سفينة تجارية سريعة' : 'Swift maritime trading ship', type: 'ship', category: lang === 'ar' ? 'نخبة' : 'Elite' },
+                          { id: 'desert-caravan', name: lang === 'ar' ? 'قافلة الصحراء' : 'Desert Caravan', price: 12000, desc: lang === 'ar' ? 'ناقلة بضائع ضخمة' : 'Massive goods transporter', type: 'caravan', category: lang === 'ar' ? 'صناعي' : 'Industrial' },
+                          { id: 'swift-camel', name: lang === 'ar' ? 'ناقة سريعة' : 'Swift Camel', price: 1200, desc: lang === 'ar' ? 'حيوان توصيل سريع' : 'Quick delivery animal', type: 'caravan', category: lang === 'ar' ? 'أساسي' : 'Basic' }
+                        ].map(item => renderBazaarItem(item))}
+                      </div>
+                    </section>
+
+                    {/* Any other properties not matched in standard list */}
+                    {Object.keys(groupedProperties).some(id => !['oasis-inn', 'merchant-loft', 'nomad-tent', 'red-sea-dhow', 'desert-caravan', 'swift-camel', 'royal-castle', 'legacy'].includes(id)) && (
+                      <section>
+                        <div className={cn("flex items-center gap-3 mb-6", lang === 'ar' ? "flex-row-reverse" : "")}>
+                          <Landmark className="text-gold-600" size={24} />
+                          <h3 className="font-display text-2xl text-gold-800">{lang === 'ar' ? 'ممتلكات أخرى' : 'Other Assets'}</h3>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 pb-12">
+                          {Object.entries(groupedProperties)
+                            .filter(([id]) => !['oasis-inn', 'merchant-loft', 'nomad-tent', 'red-sea-dhow', 'desert-caravan', 'swift-camel', 'royal-castle', 'legacy'].includes(id))
+                            .map(([id, instances]) => renderBazaarItem({
+                                id: id, 
+                                name: instances[0].name, 
+                                price: instances[0].price || 0,
+                                desc: lang === 'ar' ? 'ممتلكات خاصة' : 'Private Asset',
+                                type: instances[0].type || 'house',
+                                category: instances[0].category || 'Basic'
+                            }))
+                          }
+                        </div>
+                      </section>
+                    )}
                 </div>
               </motion.div>
             )}

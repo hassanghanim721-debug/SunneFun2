@@ -150,7 +150,7 @@ export const TradeMap: React.FC<TradeMapProps> = memo(({ lang, onPinClick, activ
             }}
             transition={{ duration: 45, repeat: Infinity, ease: "easeInOut" }}
           >
-            <text fontSize="30" dy="15" dx="-15">⛵</text>
+            <text fontSize="30" dy="15" dx="-15" style={{ fontFamily: '"Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", sans-serif' }}>⛵</text>
           </motion.g>
 
           {/* Animated Horse (Silk Road) */}
@@ -167,7 +167,7 @@ export const TradeMap: React.FC<TradeMapProps> = memo(({ lang, onPinClick, activ
               times: [0, 0.22, 0.45, 0.47, 0.5, 0.5, 0.72, 0.95, 0.97, 1]
             }}
           >
-            <text fontSize="25" dy="12" dx="-12">🐎</text>
+            <text fontSize="25" dy="12" dx="-12" style={{ fontFamily: '"Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", sans-serif' }}>🐎</text>
           </motion.g>
 
           {/* Animated Amber Road Convoy (1 Horse + 3 Camels) */}
@@ -193,7 +193,7 @@ export const TradeMap: React.FC<TradeMapProps> = memo(({ lang, onPinClick, activ
                   times: [0, 0.11, 0.22, 0.33, 0.45, 0.47, 0.5, 0.61, 0.72, 0.83, 0.95, 0.97, 1]
                 }}
               >
-                <text fontSize="22" dy="12" dx="-12">{unit.char}</text>
+                <text fontSize="22" dy="12" dx="-12" style={{ fontFamily: '"Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", sans-serif' }}>{unit.char}</text>
               </motion.g>
             ))}
           </g>
