@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { Landmark, Languages } from 'lucide-react';
 import { auth, googleProvider } from '@/src/lib/firebase';
-import { signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
+import { signInWithPopup, GoogleAuthProvider, signInWithRedirect, getRedirectResult } from 'firebase/auth';
 import { TRANSLATIONS } from '@/src/constants';
 import { cn } from '@/src/lib/utils';
 
@@ -27,6 +27,26 @@ export const Auth: React.FC<AuthProps> = ({ onAuthComplete, lang, setLang }) => 
         console.error("Failed to parse saved user", e);
       }
     }
+
+    // Handle redirect result
+    const checkRedirect = async () => {
+      setLoading(true);
+      try {
+        const result = await getRedirectResult(auth);
+        if (result) {
+          onAuthComplete(result.user);
+        }
+      } catch (err: any) {
+        console.error("Redirect Error:", err);
+        // Don't show error immediately as this runs on every mount
+        if (err.code !== 'auth/internal-error' && err.code !== 'auth/network-request-failed') {
+          // setError(lang === 'ar' ? 'فشل تسجيل الدخول التلقائي.' : 'Auto-login failed.');
+        }
+      } finally {
+        setLoading(false);
+      }
+    };
+    checkRedirect();
   }, []);
 
   const handleQuickReconnect = async () => {
@@ -35,12 +55,12 @@ export const Auth: React.FC<AuthProps> = ({ onAuthComplete, lang, setLang }) => 
     setError('');
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({
-      login_hint: lastUser.email
+      login_hint: lastUser.email,
+      prompt: 'select_account'
     });
     try {
-      const result = await signInWithPopup(auth, provider);
-      onAuthComplete(result.user);
-      setLoading(false);
+      // Use redirect for mobile/webview compatibility
+      await signInWithRedirect(auth, provider);
     } catch (err: any) {
       console.error(err);
       setError(lang === 'ar' ? 'فشل تسجيل الدخول. حاول مجدداً.' : 'Login failed. Please try again.');
@@ -52,15 +72,17 @@ export const Auth: React.FC<AuthProps> = ({ onAuthComplete, lang, setLang }) => 
     setLoading(true);
     setError('');
     const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({
+      prompt: 'select_account'
+    });
     if (lastUser?.email) {
       provider.setCustomParameters({
         login_hint: lastUser.email
       });
     }
     try {
-      const result = await signInWithPopup(auth, provider);
-      onAuthComplete(result.user);
-      setLoading(false);
+      // Use redirect for mobile/webview compatibility
+      await signInWithRedirect(auth, provider);
     } catch (err: any) {
       console.error(err);
       setError(lang === 'ar' ? 'فشل تسجيل الدخول. حاول مجدداً.' : 'Login failed. Please try again.');

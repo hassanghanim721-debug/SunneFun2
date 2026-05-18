@@ -1,4 +1,4 @@
-# Qafila: Silk & Sand - Project Manifest
+# SunneFun - Project Manifest
 
 ## 1. Project Vision
 Trade-management RPG where users manage a treasury, buy limited real estate, and run trade convoys. Historical Middle Eastern/Silk Road setting.

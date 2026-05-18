@@ -1,4 +1,4 @@
-# Security Specification for Qafila: Silk & Sand
+# Security Specification for SunneFun
 
 ## 1. Data Invariants
 - Users can only access their own profile and assets.

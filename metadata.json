@@ -1,6 +1,8 @@
 {
-  "name": "Qafila: Silk & Sand",
+  "name": "SunneFun",
   "description": "An immersive trade simulation set in a fictionalized Golden Age. Invest in convoys, trade in the markets, and watch your wealth grow as caravans traverse ancient paths.",
   "requestFramePermissions": [],
-  "majorCapabilities": []
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

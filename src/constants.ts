@@ -28,8 +28,8 @@ export interface Convoy {
 
 export const TRANSLATIONS = {
   en: {
-    title: 'QAFILA',
-    subtitle: 'SILK & SAND',
+    title: 'SunneFun',
+    subtitle: 'PREMIUM TRADE RPG',
     tradeMap: 'Trade Map',
     marketplace: 'Grand Bazaar',
     wealth: 'My Treasury',
@@ -81,8 +81,8 @@ export const TRANSLATIONS = {
     secondaryMarket: 'Secondary Market'
   },
   ar: {
-    title: 'قافلة',
-    subtitle: 'الحرير والرمال',
+    title: 'SunneFun',
+    subtitle: 'لعبة التجارة المتميزة',
     tradeMap: 'خريطة التجارة',
     marketplace: 'البازار الكبير',
     wealth: 'خزانتي',
@@ -168,3 +168,10 @@ export const ROUTES: Route[] = [
     type: 'sea' 
   }
 ];
+
+export const CAPS: Record<string, number> = {
+  'nomad-tent': 8000,
+  'merchant-loft': 1000,
+  'oasis-inn': 500,
+  'royal-castle': 500
+};

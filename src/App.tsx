@@ -6,6 +6,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { TradeMap } from './components/TradeMap';
+import { BazaarItemCard } from './components/BazaarItemCard';
 import { Auth } from './components/Auth';
 import { motion, AnimatePresence } from 'motion/react';
 import { ShoppingBag, Wallet, Coins, Landmark, Ship, Home, TrendingUp, AlertCircle, CheckCircle2, Menu, X, Moon, Sun, Crown, Gem, Store, User, Bell, Skull, ScrollText } from 'lucide-react';
@@ -27,17 +28,10 @@ import {
   getDocs,
   writeBatch 
 } from 'firebase/firestore';
-import { TRANSLATIONS } from './constants';
+import { TRANSLATIONS, CAPS } from './constants';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('map');
-  const CAPS: Record<string, number> = {
-    'nomad-tent': 8000,
-    'merchant-loft': 1000,
-    'oasis-inn': 500,
-    'royal-castle': 500
-  };
-
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<any>(null);
   const [activeInvestments, setActiveInvestments] = useState<any[]>([]);
@@ -86,8 +80,8 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  const getUserRank = (balance: number = 0) => {
-    if (balance >= 500000) {
+  const getUserRank = (value: number = 0) => {
+    if (value >= 500000) {
       return {
         title: lang === 'ar' ? 'سلطان' : 'Sultan',
         icon: Crown,
@@ -98,7 +92,7 @@ export default function App() {
         rank: 3
       };
     }
-    if (balance >= 100000) {
+    if (value >= 100000) {
       return {
         title: lang === 'ar' ? 'تاجر مشهور' : 'Famous Merchant',
         icon: Gem,
@@ -429,11 +423,19 @@ export default function App() {
     }
   }, [notification]);
 
+  // UI Timer: Updates current time every second for countdowns.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Maturation & Rent Timer: Processes maturation and updates/notifications every 15 seconds.
   useEffect(() => {
     const timer = setInterval(async () => {
       if (!profile || !user) return;
       const now = Date.now();
-      setCurrentTime(now);
       
       // Proactive maturation check for trades
       const readyToCompletePool = activeInvestments.filter(inv => 
@@ -502,6 +504,9 @@ export default function App() {
       }
 
       // Periodically notify about rent or auto-collect
+      const autoCollectIds: string[] = [];
+      let autoCollectTotalRent = 0;
+
       properties.forEach(prop => {
         const lastCollected = getTimestampMills(prop.lastRentCollectedAt || prop.purchasedAt);
         const hours = Math.floor((now - lastCollected) / 3600000);
@@ -510,10 +515,8 @@ export default function App() {
           const currentRent = hours * Math.floor(prop.price * 0.05);
           
           if (hasAutoCollect) {
-            // Auto collect logic
-            if (!isProcessing) {
-              handleCollectRent(prop.id, prop.name, prop.price, currentRent, true);
-            }
+            autoCollectIds.push(prop.id);
+            autoCollectTotalRent += currentRent;
           } else if (!dismissedNotifications.has(`rent-${prop.id}`) && !persistentNotifications.some(n => n.id === `rent-${prop.id}`)) {
             const rentNotif = {
               id: `rent-${prop.id}`,
@@ -525,7 +528,23 @@ export default function App() {
           }
         }
       });
-    }, 2000); // Check every 2 seconds for batch processing
+
+      if (autoCollectIds.length > 0 && !isProcessing) {
+        // Collect in chunks of 450 to stay under 500 op limit
+        for (let i = 0; i < autoCollectIds.length; i += 450) {
+          const chunk = autoCollectIds.slice(i, i + 450);
+          const chunkRent = properties
+            .filter(p => chunk.includes(p.id))
+            .reduce((sum, p) => {
+              const lastC = getTimestampMills(p.lastRentCollectedAt || p.purchasedAt);
+              const hrs = Math.floor((now - lastC) / 3600000);
+              return sum + (hrs * Math.floor(p.price * 0.05));
+            }, 0);
+          
+          handleCollectRent(chunk, lang === 'ar' ? 'مجموعة عقارات' : 'Multiple Assets', 0, chunkRent, true);
+        }
+      }
+    }, 15000); // Check every 15 seconds for database operations
     return () => clearInterval(timer);
   }, [activeInvestments, properties, user, profile, isProcessing, persistentNotifications, lang]);
 
@@ -1073,178 +1092,30 @@ export default function App() {
     }
   }, [profile?.balance, properties.length, tradeLogs, localQuests.length]);
 
-  const BazaarItemCard = ({ item, ownedInstances = [] }: { item: any; ownedInstances?: any[]; key?: any }) => {
-    const isOwned = ownedInstances.length > 0;
-    
-    // Rent calculation for all owned instances
-    const currentRent = ownedInstances.reduce((acc, inst) => {
-      const lastCollected = getTimestampMills(inst.lastRentCollectedAt || inst.purchasedAt);
-      const hoursElapsed = (currentTime - lastCollected) / (1000 * 60 * 60);
-      const rentableHours = Math.floor(hoursElapsed);
-      return acc + (rentableHours * Math.floor((item.price || 0) * 0.01));
-    }, 0);
-
-    const currentCount = globalStats?.[item.id] || 0;
-    const cap = CAPS[item.id];
-    const isSoldOut = cap !== undefined && currentCount >= cap;
-    const isLocked = item.id === 'royal-castle' && !isConvoyLeader;
-
-    const propertyMap: Record<string, { en: string, ar: string }> = {
-      'oasis-inn': { en: 'Grand Villa', ar: 'فيلا فخمة' },
-      'merchant-loft': { en: 'Merchant Loft', ar: 'نزل التاجر' },
-      'nomad-tent': { en: 'Simple House', ar: 'منزل بسيط' },
-      'red-sea-dhow': { en: 'Red Sea Dhow', ar: 'سفينة البحر الأحمر' },
-      'desert-caravan': { en: 'Desert Caravan', ar: 'قافلة الصحراء' },
-      'swift-camel': { en: 'Swift Camel', ar: 'ناقة سريعة' }
-    };
-
-    const localizedName = item.id && propertyMap[item.id] 
-      ? propertyMap[item.id][lang] 
-      : item.name;
-
-    const maxBuyable = cap !== undefined ? Math.max(0, cap - currentCount) : 999;
-
+  const renderBazaarItem = (item: any) => {
+    const ownedInstances = properties.filter(p => p.itemId === item.id);
     return (
-      <div className={cn(
-        "glass-panel p-4 sm:p-6 flex flex-col h-full group transition-all duration-300",
-        darkMode ? "text-gold-50" : "text-gray-900",
-        isOwned ? (darkMode ? "border-green-600/50 shadow-[0_0_15px_rgba(34,197,94,0.1)]" : "border-green-300 shadow-[0_0_15px_rgba(34,197,94,0.1)]") : ""
-      )}>
-        <div className="flex justify-between items-start mb-3 sm:mb-4">
-          <div className="flex items-center gap-3">
-            <div className={cn(
-              "w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-110",
-              darkMode ? "bg-gold-900/20 text-gold-400" : "bg-gold-50 text-gold-700",
-              isSoldOut && !isOwned ? "grayscale opacity-50" : "",
-              isLocked ? "bg-gray-100 text-gray-400 grayscale" : ""
-            )}>
-              {isLocked ? <AlertCircle size={20} className="sm:w-6 sm:h-6" /> : (item.type === 'ship' ? <Ship size={20} className="sm:w-6 sm:h-6" /> : <Home size={20} className="sm:w-6 sm:h-6" />)}
-            </div>
-            <div>
-              <h4 className="font-serif font-bold text-base sm:text-lg leading-tight">{localizedName}</h4>
-              <p className={cn(
-                "text-[9px] sm:text-[10px] font-black uppercase tracking-widest",
-                isLocked ? "text-red-500" : "text-gold-600"
-              )}>
-                {isLocked ? t.requiresLeader : (item.category || 'Legacy')}
-              </p>
-              {cap !== undefined && (
-                <div className="flex items-center gap-1 mt-1">
-                  <div className="h-1 w-12 bg-gray-200 rounded-full overflow-hidden">
-                    <div 
-                      className={cn("h-full", isSoldOut ? "bg-red-500" : "bg-gold-500")} 
-                      style={{ width: `${Math.min(100, (currentCount / cap) * 100)}%` }} 
-                    />
-                  </div>
-                  <span className="text-[8px] text-gray-400 font-bold uppercase">
-                    {cap - currentCount} {lang === 'ar' ? 'متبقي' : 'Left'}
-                  </span>
-                </div>
-              )}
-            </div>
-          </div>
-          {isOwned && (
-            <div className="bg-green-100 text-green-700 text-[8px] font-black uppercase px-2 py-1 rounded-full tracking-wider animate-pulse flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-              {lang === 'ar' ? `تمتلك ${ownedInstances.length}` : `Owned ${ownedInstances.length}`}
-            </div>
-          )}
-          {isSoldOut && !isOwned && (
-            <div className="bg-red-100 text-red-700 text-[8px] font-black uppercase px-2 py-1 rounded-full tracking-wider">
-              {lang === 'ar' ? 'نفدت' : 'Sold Out'}
-            </div>
-          )}
-        </div>
-
-        <p className="text-sm text-gray-500 mb-6 flex-1">{item.desc}</p>
-        
-        <div className="space-y-4 pt-4 border-t border-gold-100/50">
-          <div className={cn("flex flex-col gap-4")}>
-            <div className={cn("flex items-center justify-between", lang === 'ar' ? "flex-row-reverse" : "")}>
-              <div className={lang === 'ar' ? "text-right" : "text-left"}>
-                <span className="text-[10px] text-gray-400 font-bold uppercase block mb-0.5">{lang === 'ar' ? 'السعر' : 'Price'}</span>
-                <span className="font-bold text-gold-700 text-xl">{item.price.toLocaleString()} {t.currency}</span>
-              </div>
-            </div>
-
-            {!isOwned ? (
-              <button 
-                onClick={() => {
-                  setModalQuantity(1);
-                  setConfirmingAssetPurchase({ item, initialQuantity: 1 });
-                }}
-                disabled={isSoldOut || isLocked || isProcessing}
-                className={cn(
-                  "w-full py-3 rounded-xl text-sm font-bold shadow-lg transition-all transform active:scale-95 flex items-center justify-center gap-2",
-                  isSoldOut || isLocked || isProcessing ? "bg-gray-300 text-gray-500 cursor-not-allowed" : (
-                    item.type === 'ship' 
-                      ? "bg-gold-900 text-gold-100 hover:bg-black" 
-                      : "bg-gold-500 text-gold-950 hover:bg-gold-400"
-                  )
-                )}
-              >
-                {isLocked ? t.locked : isSoldOut ? (lang === 'ar' ? 'مبيوع' : 'Sold') : (
-                  <>
-                    <span>{lang === 'ar' ? 'شراء' : 'Buy Now'}</span>
-                  </>
-                )}
-              </button>
-            ) : (
-              <div className="space-y-3">
-                <div className={cn("flex items-center justify-between", lang === 'ar' ? "flex-row-reverse" : "")}>
-                  <div className={lang === 'ar' ? "text-right" : "text-left"}>
-                    <p className="text-[10px] text-green-600 font-bold uppercase">{lang === 'ar' ? 'إجمالي الإيجار' : 'Total Rent'}</p>
-                    <p className="font-black text-green-600 text-lg">+{currentRent.toLocaleString()} {t.currency}</p>
-                  </div>
-                  <button
-                    onClick={() => {
-                        const instancesToCollect = ownedInstances.filter(inst => {
-                            const lastColl = getTimestampMills(inst.lastRentCollectedAt || inst.purchasedAt);
-                            return Math.floor((currentTime - lastColl) / 3600000) > 0;
-                        });
-                        if (instancesToCollect.length > 0) {
-                            const totalToCollect = instancesToCollect.reduce((acc, inst) => {
-                                const lastColl = getTimestampMills(inst.lastRentCollectedAt || inst.purchasedAt);
-                                const hrs = Math.floor((currentTime - lastColl) / 3600000);
-                                return acc + (hrs * Math.floor(item.price * 0.05));
-                            }, 0);
-                            handleCollectRent(instancesToCollect.map(i => i.id), localizedName, item.price, totalToCollect);
-                        }
-                    }}
-                    disabled={currentRent <= 0 || isProcessing}
-                    className="px-4 py-2 bg-green-600 text-white rounded-xl text-[10px] font-bold hover:bg-green-700 disabled:opacity-30 transition-all shadow-md active:scale-95"
-                  >
-                    {lang === 'ar' ? 'تحصيل الكل' : 'Collect All'}
-                  </button>
-                </div>
-                
-                <div className="flex gap-2">
-                  <button 
-                    onClick={() => {
-                      setModalQuantity(1);
-                      setConfirmingAssetPurchase({ item, initialQuantity: 1 });
-                    }}
-                    disabled={isSoldOut || isLocked || isProcessing || (profile.balance < item.price)}
-                    className="flex-1 py-3 bg-gold-100 text-gold-700 border border-gold-200 rounded-xl text-xs font-bold hover:bg-gold-200 transition-all active:scale-95"
-                  >
-                    {lang === 'ar' ? `شراء إضافي` : `Buy More`}
-                  </button>
-                  <button
-                    onClick={() => {
-                      setModalQuantity(1);
-                      setConfirmingSell({ ownedInstances, itemId: item.id, name: localizedName, price: item.price });
-                    }}
-                    disabled={isProcessing}
-                    className="flex-1 py-3 border border-red-200 text-red-500 rounded-xl text-xs font-bold hover:bg-red-50 transition-all active:scale-95"
-                  >
-                    {lang === 'ar' ? 'بيع' : 'Sell'}
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
+      <BazaarItemCard 
+        key={item.id}
+        item={item} 
+        ownedInstances={ownedInstances}
+        currentTime={currentTime}
+        isConvoyLeader={isConvoyLeader}
+        lang={lang}
+        t={t}
+        globalStats={globalStats}
+        darkMode={darkMode}
+        isProcessing={isProcessing}
+        onPurchase={(item: any) => {
+          setModalQuantity(1);
+          setConfirmingAssetPurchase({ item, initialQuantity: 1 });
+        }}
+        onSell={(owned: any[], localizedName: string) => {
+          setModalQuantity(1);
+          setConfirmingSell({ ownedInstances: owned, itemId: item.id, name: localizedName, price: item.price });
+        }}
+        onCollectRent={handleCollectRent}
+      />
     );
   };
 
@@ -1876,13 +1747,13 @@ export default function App() {
                   ];
                   const p = routes.find(r => r.id === id);
                   if (p) {
-                    const isRouteLocked = p.minRank > 0 && (profile?.balance || 0) < p.minRank;
+                    const isRouteLocked = p.minRank > 0 && netWorth < p.minRank;
                     if (isRouteLocked) {
                       setNotification({ 
                         type: 'error', 
                         message: lang === 'ar' 
-                          ? 'يتطلب هذا المسار رتبة "قائد قافلة" (رصيد 250,000 دينار)' 
-                          : 'This route requires "Convoy Leader" status (250,000 Dinars)' 
+                          ? `يتطلب هذا المسار رتبة "قائد قافلة" (صافي ثروة ${p.minRank.toLocaleString()} دينار)` 
+                          : `This route requires "Convoy Leader" status (${p.minRank.toLocaleString()} Dinars Net Worth)` 
                       });
                     } else {
                       setConfirmingTrade(p);

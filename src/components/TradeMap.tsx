@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '@/src/lib/utils';
 import { CITIES, ROUTES, TRANSLATIONS } from '@/src/constants';
@@ -10,7 +10,7 @@ interface TradeMapProps {
   darkMode?: boolean;
 }
 
-export const TradeMap: React.FC<TradeMapProps> = ({ lang, onPinClick, activeStormRoute, darkMode }) => {
+export const TradeMap: React.FC<TradeMapProps> = memo(({ lang, onPinClick, activeStormRoute, darkMode }) => {
   const t = TRANSLATIONS[lang];
 
   const PINS = [
@@ -50,7 +50,7 @@ export const TradeMap: React.FC<TradeMapProps> = ({ lang, onPinClick, activeStor
                 : 'radial-gradient(circle at center, rgba(146, 64, 14, 0.4) 0%, rgba(146, 64, 14, 0.1) 70%, transparent 100%)'
             }}
           >
-            {[...Array(20)].map((_, i) => (
+            {[...Array(8)].map((_, i) => (
               <motion.div
                 key={i}
                 initial={{ x: -25, y: Math.random() * 200, opacity: 0 }}
@@ -60,9 +60,9 @@ export const TradeMap: React.FC<TradeMapProps> = ({ lang, onPinClick, activeStor
                   opacity: [0, 0.8, 0] 
                 }}
                 transition={{ 
-                  duration: 1 + Math.random() * 1.5, 
+                  duration: 1.5 + Math.random() * 2, 
                   repeat: Infinity, 
-                  delay: Math.random() * 1,
+                  delay: Math.random() * 2,
                   ease: "linear"
                 }}
                 className={cn(
@@ -307,4 +307,4 @@ export const TradeMap: React.FC<TradeMapProps> = ({ lang, onPinClick, activeStor
       </div>
     </div>
   );
-};
+});
